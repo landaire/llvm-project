@@ -373,7 +373,7 @@ struct ErrorGeneric : ErrorBase {
 
   ErrorGeneric() = default;  // (*)
   ErrorGeneric(u32 tid, uptr addr, uptr pc_, uptr bp_, uptr sp_, bool is_write_,
-               uptr access_size_);
+               uptr access_size_, bool is_double_fetch);
   void Print();
 };
 

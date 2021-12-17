@@ -385,7 +385,7 @@ static bool AdjacentShadowValuesAreFullyPoisoned(u8 *s) {
 }
 
 ErrorGeneric::ErrorGeneric(u32 tid, uptr pc_, uptr bp_, uptr sp_, uptr addr,
-                           bool is_write_, uptr access_size_)
+                           bool is_write_, uptr access_size_, bool is_double_fetch)
     : ErrorBase(tid),
       addr_description(addr, access_size_, /*shouldLockThreadRegistry=*/false),
       pc(pc_),
@@ -407,6 +407,9 @@ ErrorGeneric::ErrorGeneric(u32 tid, uptr pc_, uptr bp_, uptr sp_, uptr addr,
 
     // Determine the error type.
     bug_descr = "unknown-crash";
+    if (is_double_fetch) {
+      bug_descr = "double-fetch";
+    }
     if (AddrIsInMem(addr)) {
       u8 *shadow_addr = (u8 *)MemToShadow(addr);
       // If we are accessing 16 bytes, look at the second shadow byte.

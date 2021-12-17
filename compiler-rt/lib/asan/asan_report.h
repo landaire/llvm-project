@@ -47,7 +47,7 @@ bool ParseFrameDescription(const char *frame_descr,
 
 // Different kinds of error reports.
 void ReportGenericError(uptr pc, uptr bp, uptr sp, uptr addr, bool is_write,
-                        uptr access_size, u32 exp, bool fatal);
+                        uptr access_size, u32 exp, bool fatal, bool is_double_fetch);
 void ReportDeadlySignal(const SignalContext &sig);
 void ReportNewDeleteTypeMismatch(uptr addr, uptr delete_size,
                                  uptr delete_alignment,

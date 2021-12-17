@@ -778,6 +778,11 @@ void tools::linkSanitizerRuntimeDeps(const ToolChain &TC,
       TC.getTriple().isOSNetBSD() ||
       TC.getTriple().isOSOpenBSD())
     CmdArgs.push_back("-lexecinfo");
+
+  const SanitizerArgs &SanArgs = TC.getSanitizerArgs();
+  if (SanArgs.needsAsanRt()) {
+    //CmdArgs.push_back("-lasan_double_fetch");
+  }
 }
 
 static void

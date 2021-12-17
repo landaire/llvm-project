@@ -458,7 +458,7 @@ static bool SuppressErrorReport(uptr pc) {
 }
 
 void ReportGenericError(uptr pc, uptr bp, uptr sp, uptr addr, bool is_write,
-                        uptr access_size, u32 exp, bool fatal) {
+                        uptr access_size, u32 exp, bool fatal, bool is_double_fetch) {
   if (!fatal && SuppressErrorReport(pc)) return;
   ENABLE_FRAME_POINTER;
 
@@ -473,7 +473,7 @@ void ReportGenericError(uptr pc, uptr bp, uptr sp, uptr addr, bool is_write,
 
   ScopedInErrorReport in_report(fatal);
   ErrorGeneric error(GetCurrentTidOrInvalid(), pc, bp, sp, addr, is_write,
-                     access_size);
+                     access_size, is_double_fetch);
   in_report.ReportError(error);
 }
 
@@ -486,7 +486,7 @@ void __asan_report_error(uptr pc, uptr bp, uptr sp, uptr addr, int is_write,
                          uptr access_size, u32 exp) {
   ENABLE_FRAME_POINTER;
   bool fatal = flags()->halt_on_error;
-  ReportGenericError(pc, bp, sp, addr, is_write, access_size, exp, fatal);
+  ReportGenericError(pc, bp, sp, addr, is_write, access_size, exp, fatal, false);
 }
 
 void NOINLINE __asan_set_error_report_callback(void (*callback)(const char*)) {

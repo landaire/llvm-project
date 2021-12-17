@@ -118,6 +118,8 @@ add_compiler_rt_object_libraries(RTAsan_dynamic
   CFLAGS ${ASAN_DYNAMIC_CFLAGS}
   DEFS ${ASAN_DYNAMIC_DEFINITIONS})
 
+link_directories(/home/lander/dev/asan_double_fetch/target/debug/)
+
 if(NOT APPLE)
   add_compiler_rt_object_libraries(RTAsan
     ARCHS ${ASAN_SUPPORTED_ARCH}
@@ -184,6 +186,7 @@ else()
     RTLSanCommon
     RTUbsan)
 
+
   add_compiler_rt_runtime(clang_rt.asan
     STATIC
     ARCHS ${ASAN_SUPPORTED_ARCH}
@@ -246,6 +249,7 @@ else()
           SanitizerCommonWeakInterception)
     endif()
 
+    if ("${arch}" STREQUAL "x86_64")
     add_compiler_rt_runtime(clang_rt.asan
       SHARED
       ARCHS ${arch}
@@ -262,9 +266,31 @@ else()
       CFLAGS ${ASAN_DYNAMIC_CFLAGS}
       LINK_FLAGS ${ASAN_DYNAMIC_LINK_FLAGS}
                 ${VERSION_SCRIPT_FLAG}
-      LINK_LIBS ${ASAN_DYNAMIC_LIBS}
+      LINK_LIBS ${ASAN_DYNAMIC_LIBS}  asan_double_fetch
       DEFS ${ASAN_DYNAMIC_DEFINITIONS}
       PARENT_TARGET asan)
+    else()
+
+    add_compiler_rt_runtime(clang_rt.asan
+      SHARED
+      ARCHS ${arch}
+      OBJECT_LIBS ${ASAN_COMMON_RUNTIME_OBJECT_LIBS}
+              RTAsan_dynamic
+              # The only purpose of RTAsan_dynamic_version_script_dummy is to
+              # carry a dependency of the shared runtime on the version script.
+              # Replacing it with a straightforward
+              # add_dependencies(clang_rt.asan-dynamic-${arch} clang_rt.asan-dynamic-${arch}-version-list)
+              # generates an order-only dependency in ninja.
+              RTAsan_dynamic_version_script_dummy
+              RTUbsan_cxx
+              ${ASAN_DYNAMIC_WEAK_INTERCEPTION}
+      CFLAGS ${ASAN_DYNAMIC_CFLAGS}
+      LINK_FLAGS ${ASAN_DYNAMIC_LINK_FLAGS}
+                ${VERSION_SCRIPT_FLAG}
+      LINK_LIBS ${ASAN_DYNAMIC_LIBS} 
+      DEFS ${ASAN_DYNAMIC_DEFINITIONS}
+      PARENT_TARGET asan)
+    endif()
 
     if (SANITIZER_USE_SYMBOLS AND NOT ${arch} STREQUAL "i386")
       add_sanitizer_rt_symbols(clang_rt.asan_cxx

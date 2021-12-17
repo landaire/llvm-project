@@ -171,6 +171,30 @@ DECLARE_REAL_AND_INTERCEPTOR(void, free, void *)
   __lsan::ScopedInterceptorDisabler disabler
 #endif
 
+#ifdef __x86_64__
+extern "C" void asan_remember_shm_id(int, int);
+extern "C" void asan_register_shmat(int, void*);
+extern "C" void __asan_watch_shared_memory_region(void*, int);
+extern "C" void __asan_unwatch_shared_memory_region(void*);
+
+#ifdef  COMMON_INTERCEPTOR_MMAP_IMPL
+#undef  COMMON_INTERCEPTOR_MMAP_IMPL
+#endif
+#define COMMON_INTERCEPTOR_MMAP_IMPL(ctx, mmap, addr, sz, prot, flags, fd, \
+                                     off)                                  \
+  { \
+  if (false && !(flags & 0x100) && fd != -1) { \
+    prot = prot | 0x2; \
+  } \
+  void *ret = REAL(mmap)(addr, sz, prot, flags, fd, off); \
+  if (false && ret != (void*)-1 && !(flags & 0x100) && fd != -1) { \ 
+    __asan_watch_shared_memory_region(ret, sz); \
+  } \
+\
+  return ret; \
+    }
+    #endif
+
 #include "sanitizer_common/sanitizer_common_interceptors.inc"
 #include "sanitizer_common/sanitizer_signal_interceptors.inc"
 
@@ -610,6 +634,50 @@ DEFINE_REAL(int, vfork)
 DECLARE_EXTERN_INTERCEPTOR_AND_WRAPPER(int, vfork)
 #endif
 
+#ifdef __x86_64__
+extern "C" void asan_remember_shm_id(int, int);
+extern "C" void asan_register_shmat(int, void*);
+extern "C" void __asan_watch_shared_memory_region(void*, int);
+extern "C" void __asan_unwatch_shared_memory_region(void*);
+
+INTERCEPTOR(int, shmget, int key, int size, int shmflag) {
+  printf("hit shmget interceptor with key: %zu\n", key);
+  int ret = REAL(shmget)(key, size, shmflag);
+  if (ret > 0) {
+    asan_remember_shm_id(ret, size);
+  }
+
+  return ret;
+}
+
+INTERCEPTOR(void*, shmat, int id, int pref_addr, int shmflag) {
+  void *ret = REAL(shmat)(id, pref_addr, shmflag);
+  if (ret != (void*)-1) {
+    asan_register_shmat(id, ret);
+  }
+
+  return ret;
+}
+
+INTERCEPTOR(int, shmdt, void *addr) {
+  int ret = REAL(shmdt)(addr);
+  if (ret == 0) {
+    __asan_unwatch_shared_memory_region(addr);
+  }
+
+  return ret;
+}
+
+INTERCEPTOR(int, munmap, void *addr, int size) {
+  int ret = REAL(munmap)(addr, size);
+  if (ret == 0) {
+    __asan_unwatch_shared_memory_region(addr);
+  }
+
+  return ret;
+}
+#endif
+
 // ---------------------- InitializeAsanInterceptors ---------------- {{{1
 namespace __asan {
 void InitializeAsanInterceptors() {
@@ -618,6 +686,15 @@ void InitializeAsanInterceptors() {
   was_called_once = true;
   InitializeCommonInterceptors();
   InitializeSignalInterceptors();
+
+#ifdef __x86_64__
+  // Intercept shmem funcs
+  ASAN_INTERCEPT_FUNC(shmget);
+  ASAN_INTERCEPT_FUNC(shmat);
+  ASAN_INTERCEPT_FUNC(shmdt);
+  ASAN_INTERCEPT_FUNC(mmap);
+  ASAN_INTERCEPT_FUNC(munmap);
+#endif
 
   // Intercept str* functions.
   ASAN_INTERCEPT_FUNC(strcat);

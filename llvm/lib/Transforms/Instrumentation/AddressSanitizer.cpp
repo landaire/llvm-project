@@ -319,6 +319,11 @@ static cl::opt<std::string> ClMemoryAccessCallbackPrefix(
     cl::desc("Prefix for memory access callbacks"), cl::Hidden,
     cl::init("__asan_"));
 
+static cl::opt<std::string> ClMemoryAccessDoubleFetchCallbackPrefix(
+    "asan-memory-access-double-fetch-callback-prefix",
+    cl::desc("Prefix for double-fetch-memory access callbacks"), cl::Hidden,
+    cl::init("__asan_double_fetch_"));
+
 static cl::opt<bool>
     ClInstrumentDynamicAllocas("asan-instrument-dynamic-allocas",
                                cl::desc("instrument dynamic allocas"),
@@ -657,11 +662,19 @@ struct AddressSanitizer {
   void instrumentAddress(Instruction *OrigIns, Instruction *InsertBefore,
                          Value *Addr, uint32_t TypeSize, bool IsWrite,
                          Value *SizeArgument, bool UseCalls, uint32_t Exp);
+  void instrumentAddressForDoubleFetch(Instruction *OrigIns, Instruction *InsertBefore,
+                         Value *Addr, uint32_t TypeSize, bool IsWrite,
+                         Value *SizeArgument, bool UseCalls, uint32_t Exp);
   Instruction *instrumentAMDGPUAddress(Instruction *OrigIns,
                                        Instruction *InsertBefore, Value *Addr,
                                        uint32_t TypeSize, bool IsWrite,
                                        Value *SizeArgument);
   void instrumentUnusualSizeOrAlignment(Instruction *I,
+                                        Instruction *InsertBefore, Value *Addr,
+                                        uint32_t TypeSize, bool IsWrite,
+                                        Value *SizeArgument, bool UseCalls,
+                                        uint32_t Exp);
+  void instrumentUnusualSizeOrAlignmentForDoubleFetch(Instruction *I,
                                         Instruction *InsertBefore, Value *Addr,
                                         uint32_t TypeSize, bool IsWrite,
                                         Value *SizeArgument, bool UseCalls,
@@ -722,9 +735,13 @@ private:
   FunctionCallee AsanErrorCallback[2][2][kNumberOfAccessSizes];
   FunctionCallee AsanMemoryAccessCallback[2][2][kNumberOfAccessSizes];
 
+  FunctionCallee AsanMemoryAccessDoubleFetchCallback[2][2][kNumberOfAccessSizes];
+
   // These arrays is indexed by AccessIsWrite and Experiment.
   FunctionCallee AsanErrorCallbackSized[2][2];
   FunctionCallee AsanMemoryAccessCallbackSized[2][2];
+
+  FunctionCallee AsanMemoryAccessDoubleFetchCallbackSized[2][2];
 
   FunctionCallee AsanMemmove, AsanMemcpy, AsanMemset;
   Value *LocalDynamicShadow = nullptr;
@@ -1561,6 +1578,23 @@ static void doInstrumentAddress(AddressSanitizer *Pass, Instruction *I,
                                          IsWrite, nullptr, UseCalls, Exp);
 }
 
+static void doInstrumentAddressForDoubleFetch(AddressSanitizer *Pass, Instruction *I,
+                                Instruction *InsertBefore, Value *Addr,
+                                MaybeAlign Alignment, unsigned Granularity,
+                                uint32_t TypeSize, bool IsWrite,
+                                Value *SizeArgument, bool UseCalls,
+                                uint32_t Exp) {
+  // Instrument a 1-, 2-, 4-, 8-, or 16- byte access with one check
+  // if the data is properly aligned.
+  if ((TypeSize == 8 || TypeSize == 16 || TypeSize == 32 || TypeSize == 64 ||
+       TypeSize == 128) &&
+      (!Alignment || *Alignment >= Granularity || *Alignment >= TypeSize / 8))
+    return Pass->instrumentAddressForDoubleFetch(I, InsertBefore, Addr, TypeSize, IsWrite,
+                                   nullptr, UseCalls, Exp);
+  Pass->instrumentUnusualSizeOrAlignmentForDoubleFetch(I, InsertBefore, Addr, TypeSize,
+                                         IsWrite, nullptr, UseCalls, Exp);
+}
+
 static void instrumentMaskedLoadOrStore(AddressSanitizer *Pass,
                                         const DataLayout &DL, Type *IntptrTy,
                                         Value *Mask, Instruction *I,
@@ -1596,6 +1630,49 @@ static void instrumentMaskedLoadOrStore(AddressSanitizer *Pass,
     InstrumentedAddress =
         IRB.CreateGEP(VTy, Addr, {Zero, ConstantInt::get(IntptrTy, Idx)});
     doInstrumentAddress(Pass, I, InsertBefore, InstrumentedAddress, Alignment,
+                        Granularity, ElemTypeSize, IsWrite, SizeArgument,
+                        UseCalls, Exp);
+    doInstrumentAddressForDoubleFetch(Pass, I, InsertBefore, InstrumentedAddress, Alignment,
+                        Granularity, ElemTypeSize, IsWrite, SizeArgument,
+                        UseCalls, Exp);
+  }
+}
+
+static void instrumentMaskedLoadOrStoreForDoubleFetch(AddressSanitizer *Pass,
+                                        const DataLayout &DL, Type *IntptrTy,
+                                        Value *Mask, Instruction *I,
+                                        Value *Addr, MaybeAlign Alignment,
+                                        unsigned Granularity, uint32_t TypeSize,
+                                        bool IsWrite, Value *SizeArgument,
+                                        bool UseCalls, uint32_t Exp) {
+  auto *VTy = cast<FixedVectorType>(
+      cast<PointerType>(Addr->getType())->getElementType());
+  uint64_t ElemTypeSize = DL.getTypeStoreSizeInBits(VTy->getScalarType());
+  unsigned Num = VTy->getNumElements();
+  auto Zero = ConstantInt::get(IntptrTy, 0);
+  for (unsigned Idx = 0; Idx < Num; ++Idx) {
+    Value *InstrumentedAddress = nullptr;
+    Instruction *InsertBefore = I;
+    if (auto *Vector = dyn_cast<ConstantVector>(Mask)) {
+      // dyn_cast as we might get UndefValue
+      if (auto *Masked = dyn_cast<ConstantInt>(Vector->getOperand(Idx))) {
+        if (Masked->isZero())
+          // Mask is constant false, so no instrumentation needed.
+          continue;
+        // If we have a true or undef value, fall through to doInstrumentAddress
+        // with InsertBefore == I
+      }
+    } else {
+      IRBuilder<> IRB(I);
+      Value *MaskElem = IRB.CreateExtractElement(Mask, Idx);
+      Instruction *ThenTerm = SplitBlockAndInsertIfThen(MaskElem, I, false);
+      InsertBefore = ThenTerm;
+    }
+
+    IRBuilder<> IRB(InsertBefore);
+    InstrumentedAddress =
+        IRB.CreateGEP(VTy, Addr, {Zero, ConstantInt::get(IntptrTy, Idx)});
+    doInstrumentAddressForDoubleFetch(Pass, I, InsertBefore, InstrumentedAddress, Alignment,
                         Granularity, ElemTypeSize, IsWrite, SizeArgument,
                         UseCalls, Exp);
   }
@@ -1649,8 +1726,14 @@ void AddressSanitizer::instrumentMop(ObjectSizeOffsetVisitor &ObjSizeVis,
     instrumentMaskedLoadOrStore(this, DL, IntptrTy, O.MaybeMask, O.getInsn(),
                                 Addr, O.Alignment, Granularity, O.TypeSize,
                                 O.IsWrite, nullptr, UseCalls, Exp);
+    instrumentMaskedLoadOrStoreForDoubleFetch(this, DL, IntptrTy, O.MaybeMask, O.getInsn(),
+                                Addr, O.Alignment, Granularity, O.TypeSize,
+                                O.IsWrite, nullptr, UseCalls, Exp);
   } else {
     doInstrumentAddress(this, O.getInsn(), O.getInsn(), Addr, O.Alignment,
+                        Granularity, O.TypeSize, O.IsWrite, nullptr, UseCalls,
+                        Exp);
+    doInstrumentAddressForDoubleFetch(this, O.getInsn(), O.getInsn(), Addr, O.Alignment,
                         Granularity, O.TypeSize, O.IsWrite, nullptr, UseCalls,
                         Exp);
   }
@@ -1724,6 +1807,32 @@ Instruction *AddressSanitizer::instrumentAMDGPUAddress(
   InsertBefore = cast<Instruction>(AddrSpaceZeroLanding);
   return InsertBefore;
 }
+
+void AddressSanitizer::instrumentAddressForDoubleFetch(Instruction *OrigIns,
+                                         Instruction *InsertBefore, Value *Addr,
+                                         uint32_t TypeSize, bool IsWrite,
+                                         Value *SizeArgument, bool UseCalls,
+                                         uint32_t Exp) {
+  if (TargetTriple.isAMDGPU()) {
+    InsertBefore = instrumentAMDGPUAddress(OrigIns, InsertBefore, Addr,
+                                           TypeSize, IsWrite, SizeArgument);
+    if (!InsertBefore)
+      return;
+  }
+
+  IRBuilder<> IRB(InsertBefore);
+  Value *AddrLong = IRB.CreatePointerCast(Addr, IntptrTy);
+  size_t AccessSizeIndex = TypeSizeToSizeIndex(TypeSize);
+
+    if (Exp == 0)
+      IRB.CreateCall(AsanMemoryAccessDoubleFetchCallback[IsWrite][0][AccessSizeIndex],
+                     AddrLong);
+    else
+      IRB.CreateCall(AsanMemoryAccessDoubleFetchCallback[IsWrite][1][AccessSizeIndex],
+                     {AddrLong, ConstantInt::get(IRB.getInt32Ty(), Exp)});
+    return;
+                                         }
+
 
 void AddressSanitizer::instrumentAddress(Instruction *OrigIns,
                                          Instruction *InsertBefore, Value *Addr,
@@ -1813,6 +1922,28 @@ void AddressSanitizer::instrumentUnusualSizeOrAlignment(
         Addr->getType());
     instrumentAddress(I, InsertBefore, Addr, 8, IsWrite, Size, false, Exp);
     instrumentAddress(I, InsertBefore, LastByte, 8, IsWrite, Size, false, Exp);
+  }
+}
+
+void AddressSanitizer::instrumentUnusualSizeOrAlignmentForDoubleFetch(
+    Instruction *I, Instruction *InsertBefore, Value *Addr, uint32_t TypeSize,
+    bool IsWrite, Value *SizeArgument, bool UseCalls, uint32_t Exp) {
+  IRBuilder<> IRB(InsertBefore);
+  Value *Size = ConstantInt::get(IntptrTy, TypeSize / 8);
+  Value *AddrLong = IRB.CreatePointerCast(Addr, IntptrTy);
+  if (UseCalls) {
+    if (Exp == 0)
+      IRB.CreateCall(AsanMemoryAccessDoubleFetchCallbackSized[IsWrite][0],
+                     {AddrLong, Size});
+    else
+      IRB.CreateCall(AsanMemoryAccessDoubleFetchCallbackSized[IsWrite][1],
+                     {AddrLong, Size, ConstantInt::get(IRB.getInt32Ty(), Exp)});
+  } else {
+    Value *LastByte = IRB.CreateIntToPtr(
+        IRB.CreateAdd(AddrLong, ConstantInt::get(IntptrTy, TypeSize / 8 - 1)),
+        Addr->getType());
+    instrumentAddressForDoubleFetch(I, InsertBefore, Addr, 8, IsWrite, Size, false, Exp);
+    instrumentAddressForDoubleFetch(I, InsertBefore, LastByte, 8, IsWrite, Size, false, Exp);
   }
 }
 
@@ -2645,6 +2776,10 @@ void AddressSanitizer::initializeCallbacks(Module &M) {
           ClMemoryAccessCallbackPrefix + ExpStr + TypeStr + "N" + EndingStr,
           FunctionType::get(IRB.getVoidTy(), Args2, false));
 
+      AsanMemoryAccessDoubleFetchCallbackSized[AccessIsWrite][Exp] = M.getOrInsertFunction(
+          ClMemoryAccessDoubleFetchCallbackPrefix  + ExpStr + TypeStr + "N" + EndingStr,
+          FunctionType::get(IRB.getVoidTy(), Args2, false));
+
       for (size_t AccessSizeIndex = 0; AccessSizeIndex < kNumberOfAccessSizes;
            AccessSizeIndex++) {
         const std::string Suffix = TypeStr + itostr(1ULL << AccessSizeIndex);
@@ -2656,6 +2791,11 @@ void AddressSanitizer::initializeCallbacks(Module &M) {
         AsanMemoryAccessCallback[AccessIsWrite][Exp][AccessSizeIndex] =
             M.getOrInsertFunction(
                 ClMemoryAccessCallbackPrefix + ExpStr + Suffix + EndingStr,
+                FunctionType::get(IRB.getVoidTy(), Args1, false));
+
+        AsanMemoryAccessDoubleFetchCallback[AccessIsWrite][Exp][AccessSizeIndex] =
+            M.getOrInsertFunction(
+                ClMemoryAccessDoubleFetchCallbackPrefix + ExpStr + Suffix + EndingStr,
                 FunctionType::get(IRB.getVoidTy(), Args1, false));
       }
     }

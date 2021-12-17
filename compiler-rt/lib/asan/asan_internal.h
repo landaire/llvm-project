@@ -77,6 +77,9 @@ void InitializeShadowMemory();
 // asan_malloc_linux.cpp / asan_malloc_mac.cpp
 void ReplaceSystemMalloc();
 
+// asan_malloc_linux.cpp / asan_malloc_mac.cpp
+void ReplaceSystemShmemFuncs();
+
 // asan_linux.cpp / asan_mac.cpp / asan_win.cpp
 uptr FindDynamicShadowStart();
 void *AsanDoesNotSupportStaticLinkage();
