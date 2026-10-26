@@ -35,10 +35,14 @@ STATISTIC(NumPESpillVSR, "Number of spills to vector in prologue");
 STATISTIC(NumPEReloadVSR, "Number of reloads from vector in epilogue");
 STATISTIC(NumPrologProbed, "Number of prologues probed");
 
-static cl::opt<bool>
-EnablePEVectorSpills("ppc-enable-pe-vector-spills",
-                     cl::desc("Enable spills in prologue to vector registers."),
-                     cl::init(false), cl::Hidden);
+static cl::opt<bool> EnablePEVectorSpills(
+    "ppc-enable-pe-vector-spills",
+    cl::desc("Enable spills in prologue to vector registers."), cl::init(false),
+    cl::Hidden);
+
+static bool hasRedZone(const PPCSubtarget &Subtarget) {
+  return Subtarget.isPPC64() || Subtarget.isXbox360() || !Subtarget.isSVR4ABI();
+}
 
 static unsigned computeReturnSaveOffset(const PPCSubtarget &STI) {
   if (STI.isAIXABI())
@@ -55,10 +59,12 @@ static unsigned computeTOCSaveOffset(const PPCSubtarget &STI) {
 
 static unsigned computeFramePointerSaveOffset(const PPCSubtarget &STI) {
   // First slot in the general register save area.
-  return STI.isPPC64() ? -8U : -4U;
+  return STI.isPPC64() || STI.isXbox360() ? -8U : -4U;
 }
 
 static unsigned computeLinkageSize(const PPCSubtarget &STI) {
+  if (STI.isXbox360())
+    return 16;
   if (STI.isAIXABI() || STI.isPPC64())
     return (STI.isELFv2ABI() ? 4 : 6) * (STI.isPPC64() ? 8 : 4);
 
@@ -68,14 +74,19 @@ static unsigned computeLinkageSize(const PPCSubtarget &STI) {
 
 static unsigned computeBasePointerSaveOffset(const PPCSubtarget &STI) {
   // Third slot in the general purpose register save area.
+  if (STI.isXbox360() && STI.is32BitELFABI() &&
+      STI.getTargetMachine().isPositionIndependent())
+    return -24U;
   if (STI.is32BitELFABI() && STI.getTargetMachine().isPositionIndependent())
     return -12U;
 
   // Second slot in the general purpose register save area.
-  return STI.isPPC64() ? -16U : -8U;
+  return STI.isPPC64() || STI.isXbox360() ? -16U : -8U;
 }
 
 static unsigned computeCRSaveOffset(const PPCSubtarget &STI) {
+  if (STI.isXbox360())
+    return -4U;
   return (STI.isAIXABI() && !STI.isPPC64()) ? 4 : 8;
 }
 
@@ -210,14 +221,18 @@ const PPCFrameLowering::SpillSlot *PPCFrameLowering::getCalleeSavedSpillSlots(
       {PPC::S15, -136},
       {PPC::S14, -144}};
 
-  static const SpillSlot ELFOffsets64[] = {
-      CALLEE_SAVED_FPRS,
-      CALLEE_SAVED_GPRS64,
+  static const SpillSlot ELFOffsets64[] = {CALLEE_SAVED_FPRS,
+                                           CALLEE_SAVED_GPRS64,
 
-      // VRSAVE save area offset.
-      {PPC::VRSAVE, -4},
-      CALLEE_SAVED_VRS
-  };
+                                           // VRSAVE save area offset.
+                                           {PPC::VRSAVE, -4},
+                                           CALLEE_SAVED_VRS};
+
+  static const SpillSlot Xbox360Offsets[] = {CALLEE_SAVED_FPRS,
+                                             CALLEE_SAVED_GPRS64,
+                                             {PPC::CR2, -4},
+                                             {PPC::VRSAVE, -4},
+                                             CALLEE_SAVED_VRS};
 
   static const SpillSlot AIXOffsets32[] = {CALLEE_SAVED_FPRS,
                                            CALLEE_SAVED_GPRS32,
@@ -228,6 +243,10 @@ const PPCFrameLowering::SpillSlot *PPCFrameLowering::getCalleeSavedSpillSlots(
   static const SpillSlot AIXOffsets64[] = {
       CALLEE_SAVED_FPRS, CALLEE_SAVED_GPRS64, CALLEE_SAVED_VRS};
 
+  if (Subtarget.isXbox360()) {
+    NumEntries = std::size(Xbox360Offsets);
+    return Xbox360Offsets;
+  }
   if (Subtarget.is64BitELFABI()) {
     NumEntries = std::size(ELFOffsets64);
     return ELFOffsets64;
@@ -541,7 +560,7 @@ PPCFrameLowering::twoUniqueScratchRegsRequired(MachineBasicBlock *MBB) const {
   bool IsLargeFrame = !isInt<16>(NegFrameSize);
   MachineFrameInfo &MFI = MF.getFrameInfo();
   Align MaxAlign = MFI.getMaxAlign();
-  bool HasRedZone = Subtarget.isPPC64() || !Subtarget.isSVR4ABI();
+  bool HasRedZone = hasRedZone(Subtarget);
   const PPCTargetLowering &TLI = *Subtarget.getTargetLowering();
 
   return ((IsLargeFrame || !HasRedZone) && HasBP && MaxAlign > 1) ||
@@ -617,6 +636,11 @@ void PPCFrameLowering::emitPrologue(MachineFunction &MF,
   DebugLoc dl;
   // AIX assembler does not support cfi directives.
   const bool needsCFI = MF.needsFrameMoves() && !Subtarget.isAIXABI();
+  auto getDwarfRegNum = [&](MCRegister Reg) {
+    if (Subtarget.isXbox360() && PPC::G8RCRegClass.contains(Reg))
+      Reg = RegInfo->getSubReg(Reg, PPC::sub_32);
+    return MRI->getDwarfRegNum(Reg, true);
+  };
 
   const bool HasFastMFLR = Subtarget.hasFastMFLR();
 
@@ -645,34 +669,43 @@ void PPCFrameLowering::emitPrologue(MachineFunction &MF,
   // Do we have a frame pointer and/or base pointer for this function?
   bool HasFP = hasFP(MF);
   bool HasBP = RegInfo->hasBasePointer(MF);
-  bool HasRedZone = isPPC64 || !isSVR4ABI;
+  bool HasRedZone = hasRedZone(Subtarget);
   const bool HasROPProtect = Subtarget.hasROPProtect();
   bool HasPrivileged = Subtarget.hasPrivileged();
 
-  Register SPReg       = isPPC64 ? PPC::X1  : PPC::R1;
+  const bool Preserve64BitGPRs = isPPC64 || Subtarget.isXbox360();
+  Register SPReg = isPPC64 ? PPC::X1 : PPC::R1;
   Register BPReg = RegInfo->getBaseRegister(MF);
-  Register FPReg       = isPPC64 ? PPC::X31 : PPC::R31;
-  Register LRReg       = isPPC64 ? PPC::LR8 : PPC::LR;
-  Register TOCReg      = isPPC64 ? PPC::X2 :  PPC::R2;
+  Register FPReg = isPPC64 ? PPC::X31 : PPC::R31;
+  Register LRReg = isPPC64 ? PPC::LR8 : PPC::LR;
+  Register TOCReg = isPPC64 ? PPC::X2 : PPC::R2;
   Register ScratchReg;
-  Register TempReg     = isPPC64 ? PPC::X12 : PPC::R12; // another scratch reg
+  Register TempReg = isPPC64 ? PPC::X12 : PPC::R12;
+  auto getGPRSaveReg = [&](Register Reg) -> Register {
+    if (!Preserve64BitGPRs || PPC::G8RCRegClass.contains(Reg))
+      return Reg;
+    return RegInfo->getMatchingSuperReg(Reg, PPC::sub_32, &PPC::G8RCRegClass);
+  };
+  Register FPSaveReg = getGPRSaveReg(FPReg);
+  Register BPSaveReg = getGPRSaveReg(BPReg);
+  Register PICBaseSaveReg = getGPRSaveReg(PPC::R30);
   //  ...(R12/X12 is volatile in both Darwin & SVR4, & can't be a function arg.)
-  const MCInstrDesc& MFLRInst = TII.get(isPPC64 ? PPC::MFLR8
-                                                : PPC::MFLR );
-  const MCInstrDesc& StoreInst = TII.get(isPPC64 ? PPC::STD
-                                                 : PPC::STW );
-  const MCInstrDesc& StoreUpdtInst = TII.get(isPPC64 ? PPC::STDU
-                                                     : PPC::STWU );
-  const MCInstrDesc& StoreUpdtIdxInst = TII.get(isPPC64 ? PPC::STDUX
-                                                        : PPC::STWUX);
-  const MCInstrDesc& OrInst = TII.get(isPPC64 ? PPC::OR8
-                                              : PPC::OR );
-  const MCInstrDesc& SubtractCarryingInst = TII.get(isPPC64 ? PPC::SUBFC8
-                                                            : PPC::SUBFC);
-  const MCInstrDesc& SubtractImmCarryingInst = TII.get(isPPC64 ? PPC::SUBFIC8
-                                                               : PPC::SUBFIC);
-  const MCInstrDesc &MoveFromCondRegInst = TII.get(isPPC64 ? PPC::MFCR8
-                                                           : PPC::MFCR);
+  const MCInstrDesc &MFLRInst = TII.get(isPPC64 ? PPC::MFLR8 : PPC::MFLR);
+  const MCInstrDesc &StoreInst = TII.get(isPPC64 ? PPC::STD : PPC::STW);
+  const MCInstrDesc &GPRStoreInst =
+      TII.get(Preserve64BitGPRs ? PPC::STD : PPC::STW);
+  const MCInstrDesc &GPRStoreIndexedInst =
+      TII.get(Preserve64BitGPRs ? PPC::STDX : PPC::STWX);
+  const MCInstrDesc &StoreUpdtInst = TII.get(isPPC64 ? PPC::STDU : PPC::STWU);
+  const MCInstrDesc &StoreUpdtIdxInst =
+      TII.get(isPPC64 ? PPC::STDUX : PPC::STWUX);
+  const MCInstrDesc &OrInst = TII.get(isPPC64 ? PPC::OR8 : PPC::OR);
+  const MCInstrDesc &SubtractCarryingInst =
+      TII.get(isPPC64 ? PPC::SUBFC8 : PPC::SUBFC);
+  const MCInstrDesc &SubtractImmCarryingInst =
+      TII.get(isPPC64 ? PPC::SUBFIC8 : PPC::SUBFIC);
+  const MCInstrDesc &MoveFromCondRegInst =
+      TII.get(isPPC64 ? PPC::MFCR8 : PPC::MFCR);
   const MCInstrDesc &StoreWordInst = TII.get(isPPC64 ? PPC::STW8 : PPC::STW);
   const MCInstrDesc &HashST =
       TII.get(isPPC64 ? (HasPrivileged ? PPC::HASHSTP8 : PPC::HASHST8)
@@ -822,20 +855,20 @@ void PPCFrameLowering::emitPrologue(MachineFunction &MF,
 
   if (HasRedZone) {
     if (HasFP)
-      BuildMI(MBB, MBBI, dl, StoreInst)
-        .addReg(FPReg)
-        .addImm(FPOffset)
-        .addReg(SPReg);
+      BuildMI(MBB, MBBI, dl, GPRStoreInst)
+          .addReg(FPSaveReg)
+          .addImm(FPOffset)
+          .addReg(SPReg);
     if (FI->usesPICBase())
-      BuildMI(MBB, MBBI, dl, StoreInst)
-        .addReg(PPC::R30)
-        .addImm(PBPOffset)
-        .addReg(SPReg);
+      BuildMI(MBB, MBBI, dl, GPRStoreInst)
+          .addReg(PICBaseSaveReg)
+          .addImm(PBPOffset)
+          .addReg(SPReg);
     if (HasBP)
-      BuildMI(MBB, MBBI, dl, StoreInst)
-        .addReg(BPReg)
-        .addImm(BPOffset)
-        .addReg(SPReg);
+      BuildMI(MBB, MBBI, dl, GPRStoreInst)
+          .addReg(BPSaveReg)
+          .addImm(BPOffset)
+          .addReg(SPReg);
   }
 
   // Generate the instruction to store the LR. In the case where ROP protection
@@ -1013,40 +1046,40 @@ void PPCFrameLowering::emitPrologue(MachineFunction &MF,
           // R0 += (FPOffset-LastOffset).
           // Need addic, since addi treats R0 as 0.
           BuildMI(MBB, MBBI, dl, TII.get(PPC::ADDIC), ScratchReg)
-            .addReg(ScratchReg)
-            .addImm(FPOffset-LastOffset);
+              .addReg(ScratchReg)
+              .addImm(FPOffset - LastOffset);
           LastOffset = FPOffset;
           // Store FP into *R0.
-          BuildMI(MBB, MBBI, dl, TII.get(PPC::STWX))
-            .addReg(FPReg, RegState::Kill)  // Save FP.
-            .addReg(PPC::ZERO)
-            .addReg(ScratchReg);  // This will be the index (R0 is ok here).
+          BuildMI(MBB, MBBI, dl, GPRStoreIndexedInst)
+              .addReg(FPSaveReg, RegState::Kill) // Save FP.
+              .addReg(PPC::ZERO)
+              .addReg(ScratchReg); // This will be the index (R0 is ok here).
         }
         if (FI->usesPICBase()) {
           // R0 += (PBPOffset-LastOffset).
           BuildMI(MBB, MBBI, dl, TII.get(PPC::ADDIC), ScratchReg)
-            .addReg(ScratchReg)
-            .addImm(PBPOffset-LastOffset);
+              .addReg(ScratchReg)
+              .addImm(PBPOffset - LastOffset);
           LastOffset = PBPOffset;
-          BuildMI(MBB, MBBI, dl, TII.get(PPC::STWX))
-            .addReg(PPC::R30, RegState::Kill)  // Save PIC base pointer.
-            .addReg(PPC::ZERO)
-            .addReg(ScratchReg);  // This will be the index (R0 is ok here).
+          BuildMI(MBB, MBBI, dl, GPRStoreIndexedInst)
+              .addReg(PICBaseSaveReg, RegState::Kill) // Save PIC base pointer.
+              .addReg(PPC::ZERO)
+              .addReg(ScratchReg); // This will be the index (R0 is ok here).
         }
         if (HasBP) {
           // R0 += (BPOffset-LastOffset).
           BuildMI(MBB, MBBI, dl, TII.get(PPC::ADDIC), ScratchReg)
-            .addReg(ScratchReg)
-            .addImm(BPOffset-LastOffset);
+              .addReg(ScratchReg)
+              .addImm(BPOffset - LastOffset);
           LastOffset = BPOffset;
-          BuildMI(MBB, MBBI, dl, TII.get(PPC::STWX))
-            .addReg(BPReg, RegState::Kill)  // Save BP.
-            .addReg(PPC::ZERO)
-            .addReg(ScratchReg);  // This will be the index (R0 is ok here).
+          BuildMI(MBB, MBBI, dl, GPRStoreIndexedInst)
+              .addReg(BPSaveReg, RegState::Kill) // Save BP.
+              .addReg(PPC::ZERO)
+              .addReg(ScratchReg); // This will be the index (R0 is ok here).
           // BP = R0-LastOffset
           BuildMI(MBB, MBBI, dl, TII.get(PPC::ADDIC), BPReg)
-            .addReg(ScratchReg, RegState::Kill)
-            .addImm(-LastOffset);
+              .addReg(ScratchReg, RegState::Kill)
+              .addImm(-LastOffset);
         }
       } else {
         // ScratchReg is not R0, so use it as the base register. It is
@@ -1055,23 +1088,23 @@ void PPCFrameLowering::emitPrologue(MachineFunction &MF,
         // Now that the stack frame has been allocated, save all the necessary
         // registers using ScratchReg as the base address.
         if (HasFP)
-          BuildMI(MBB, MBBI, dl, StoreInst)
-            .addReg(FPReg)
-            .addImm(FPOffset)
-            .addReg(ScratchReg);
+          BuildMI(MBB, MBBI, dl, GPRStoreInst)
+              .addReg(FPSaveReg)
+              .addImm(FPOffset)
+              .addReg(ScratchReg);
         if (FI->usesPICBase())
-          BuildMI(MBB, MBBI, dl, StoreInst)
-            .addReg(PPC::R30)
-            .addImm(PBPOffset)
-            .addReg(ScratchReg);
+          BuildMI(MBB, MBBI, dl, GPRStoreInst)
+              .addReg(PICBaseSaveReg)
+              .addImm(PBPOffset)
+              .addReg(ScratchReg);
         if (HasBP) {
-          BuildMI(MBB, MBBI, dl, StoreInst)
-            .addReg(BPReg)
-            .addImm(BPOffset)
-            .addReg(ScratchReg);
+          BuildMI(MBB, MBBI, dl, GPRStoreInst)
+              .addReg(BPSaveReg)
+              .addImm(BPOffset)
+              .addReg(ScratchReg);
           BuildMI(MBB, MBBI, dl, OrInst, BPReg)
-            .addReg(ScratchReg, RegState::Kill)
-            .addReg(ScratchReg);
+              .addReg(ScratchReg, RegState::Kill)
+              .addReg(ScratchReg);
         }
       }
     } else {
@@ -1080,23 +1113,23 @@ void PPCFrameLowering::emitPrologue(MachineFunction &MF,
       // Since the SPReg has been decreased by FrameSize, add it back to each
       // offset.
       if (HasFP)
-        BuildMI(MBB, MBBI, dl, StoreInst)
-          .addReg(FPReg)
-          .addImm(FrameSize + FPOffset)
-          .addReg(SPReg);
+        BuildMI(MBB, MBBI, dl, GPRStoreInst)
+            .addReg(FPSaveReg)
+            .addImm(FrameSize + FPOffset)
+            .addReg(SPReg);
       if (FI->usesPICBase())
-        BuildMI(MBB, MBBI, dl, StoreInst)
-          .addReg(PPC::R30)
-          .addImm(FrameSize + PBPOffset)
-          .addReg(SPReg);
+        BuildMI(MBB, MBBI, dl, GPRStoreInst)
+            .addReg(PICBaseSaveReg)
+            .addImm(FrameSize + PBPOffset)
+            .addReg(SPReg);
       if (HasBP) {
-        BuildMI(MBB, MBBI, dl, StoreInst)
-          .addReg(BPReg)
-          .addImm(FrameSize + BPOffset)
-          .addReg(SPReg);
+        BuildMI(MBB, MBBI, dl, GPRStoreInst)
+            .addReg(BPSaveReg)
+            .addImm(FrameSize + BPOffset)
+            .addReg(SPReg);
         BuildMI(MBB, MBBI, dl, TII.get(PPC::ADDI), BPReg)
-          .addReg(SPReg)
-          .addImm(FrameSize);
+            .addReg(SPReg)
+            .addImm(FrameSize);
       }
     }
   }
@@ -1214,10 +1247,9 @@ void PPCFrameLowering::emitPrologue(MachineFunction &MF,
       if (I.isSpilledToReg()) {
         unsigned SpilledReg = I.getDstReg();
         unsigned CFIRegister = MF.addFrameInst(MCCFIInstruction::createRegister(
-            nullptr, MRI->getDwarfRegNum(Reg, true),
-            MRI->getDwarfRegNum(SpilledReg, true)));
+            nullptr, getDwarfRegNum(Reg), getDwarfRegNum(SpilledReg)));
         BuildMI(MBB, MBBI, dl, TII.get(TargetOpcode::CFI_INSTRUCTION))
-          .addCFIIndex(CFIRegister);
+            .addCFIIndex(CFIRegister);
       } else {
         int64_t Offset = MFI.getObjectOffset(I.getFrameIdx());
         // We have changed the object offset above but we do not want to change
@@ -1227,7 +1259,7 @@ void PPCFrameLowering::emitPrologue(MachineFunction &MF,
           Offset -= NegFrameSize;
 
         unsigned CFIIndex = MF.addFrameInst(MCCFIInstruction::createOffset(
-            nullptr, MRI->getDwarfRegNum(Reg, true), Offset));
+            nullptr, getDwarfRegNum(Reg), Offset));
         BuildMI(MBB, MBBI, dl, TII.get(TargetOpcode::CFI_INSTRUCTION))
             .addCFIIndex(CFIIndex);
       }
@@ -1267,7 +1299,7 @@ void PPCFrameLowering::inlineStackProbe(MachineFunction &MF,
   bool HasBP = RegInfo->hasBasePointer(MF);
   Register BPReg = RegInfo->getBaseRegister(MF);
   Align MaxAlign = MFI.getMaxAlign();
-  bool HasRedZone = Subtarget.isPPC64() || !Subtarget.isSVR4ABI();
+  bool HasRedZone = hasRedZone(Subtarget);
   const MCInstrDesc &CopyInst = TII.get(isPPC64 ? PPC::OR8 : PPC::OR);
   // Subroutines to generate .cfi_* directives.
   auto buildDefCFAReg = [&](MachineBasicBlock &MBB,
@@ -1567,33 +1599,39 @@ void PPCFrameLowering::emitEpilogue(MachineFunction &MF,
   // Do we have a frame pointer and/or base pointer for this function?
   bool HasFP = hasFP(MF);
   bool HasBP = RegInfo->hasBasePointer(MF);
-  bool HasRedZone = Subtarget.isPPC64() || !Subtarget.isSVR4ABI();
+  bool HasRedZone = hasRedZone(Subtarget);
   bool HasROPProtect = Subtarget.hasROPProtect();
   bool HasPrivileged = Subtarget.hasPrivileged();
 
-  Register SPReg      = isPPC64 ? PPC::X1  : PPC::R1;
+  const bool Preserve64BitGPRs = isPPC64 || Subtarget.isXbox360();
+  Register SPReg = isPPC64 ? PPC::X1 : PPC::R1;
   Register BPReg = RegInfo->getBaseRegister(MF);
-  Register FPReg      = isPPC64 ? PPC::X31 : PPC::R31;
+  Register FPReg = isPPC64 ? PPC::X31 : PPC::R31;
   Register ScratchReg;
-  Register TempReg     = isPPC64 ? PPC::X12 : PPC::R12; // another scratch reg
-  const MCInstrDesc& MTLRInst = TII.get( isPPC64 ? PPC::MTLR8
-                                                 : PPC::MTLR );
-  const MCInstrDesc& LoadInst = TII.get( isPPC64 ? PPC::LD
-                                                 : PPC::LWZ );
-  const MCInstrDesc& LoadImmShiftedInst = TII.get( isPPC64 ? PPC::LIS8
-                                                           : PPC::LIS );
-  const MCInstrDesc& OrInst = TII.get(isPPC64 ? PPC::OR8
-                                              : PPC::OR );
-  const MCInstrDesc& OrImmInst = TII.get( isPPC64 ? PPC::ORI8
-                                                  : PPC::ORI );
-  const MCInstrDesc& AddImmInst = TII.get( isPPC64 ? PPC::ADDI8
-                                                   : PPC::ADDI );
-  const MCInstrDesc& AddInst = TII.get( isPPC64 ? PPC::ADD8
-                                                : PPC::ADD4 );
-  const MCInstrDesc& LoadWordInst = TII.get( isPPC64 ? PPC::LWZ8
-                                                     : PPC::LWZ);
-  const MCInstrDesc& MoveToCRInst = TII.get( isPPC64 ? PPC::MTOCRF8
-                                                     : PPC::MTOCRF);
+  Register TempReg = isPPC64 ? PPC::X12 : PPC::R12;
+  auto getGPRSaveReg = [&](Register Reg) -> Register {
+    if (!Preserve64BitGPRs || PPC::G8RCRegClass.contains(Reg))
+      return Reg;
+    return RegInfo->getMatchingSuperReg(Reg, PPC::sub_32, &PPC::G8RCRegClass);
+  };
+  Register FPSaveReg = getGPRSaveReg(FPReg);
+  Register BPSaveReg = getGPRSaveReg(BPReg);
+  Register PICBaseSaveReg = getGPRSaveReg(PPC::R30);
+  const MCInstrDesc &MTLRInst = TII.get(isPPC64 ? PPC::MTLR8 : PPC::MTLR);
+  const MCInstrDesc &LoadInst = TII.get(isPPC64 ? PPC::LD : PPC::LWZ);
+  const MCInstrDesc &GPRLoadInst =
+      TII.get(Preserve64BitGPRs ? PPC::LD : PPC::LWZ);
+  const MCInstrDesc &LoadImmShiftedInst =
+      TII.get(isPPC64 ? PPC::LIS8 : PPC::LIS);
+  const MCInstrDesc &OrInst = TII.get(isPPC64 ? PPC::OR8 : PPC::OR);
+  const MCInstrDesc &GPROrInst =
+      TII.get(Preserve64BitGPRs ? PPC::OR8 : PPC::OR);
+  const MCInstrDesc &OrImmInst = TII.get(isPPC64 ? PPC::ORI8 : PPC::ORI);
+  const MCInstrDesc &AddImmInst = TII.get(isPPC64 ? PPC::ADDI8 : PPC::ADDI);
+  const MCInstrDesc &AddInst = TII.get(isPPC64 ? PPC::ADD8 : PPC::ADD4);
+  const MCInstrDesc &LoadWordInst = TII.get(isPPC64 ? PPC::LWZ8 : PPC::LWZ);
+  const MCInstrDesc &MoveToCRInst =
+      TII.get(isPPC64 ? PPC::MTOCRF8 : PPC::MTOCRF);
   const MCInstrDesc &HashChk =
       TII.get(isPPC64 ? (HasPrivileged ? PPC::HASHCHKP8 : PPC::HASHCHK8)
                       : (HasPrivileged ? PPC::HASHCHKP : PPC::HASHCHK));
@@ -1602,12 +1640,12 @@ void PPCFrameLowering::emitEpilogue(MachineFunction &MF,
   int64_t FPOffset = 0;
 
   // Using the same bool variable as below to suppress compiler warnings.
-  bool SingleScratchReg = findScratchRegister(&MBB, true, false, &ScratchReg,
-                                              &TempReg);
-  assert(SingleScratchReg &&
-         "Could not find an available scratch register");
+  bool SingleScratchReg =
+      findScratchRegister(&MBB, true, false, &ScratchReg, &TempReg);
+  assert(SingleScratchReg && "Could not find an available scratch register");
 
   SingleScratchReg = ScratchReg == TempReg;
+  Register GPRScratchReg = getGPRSaveReg(ScratchReg);
 
   if (HasFP) {
     int FPIndex = FI->getFramePointerSaveIndex();
@@ -1809,24 +1847,24 @@ void PPCFrameLowering::emitEpilogue(MachineFunction &MF,
     // If there is red zone, restore FP directly, since SP has already been
     // restored. Otherwise, restore the value of FP into ScratchReg.
     if (HasRedZone || RBReg == SPReg)
-      BuildMI(MBB, MBBI, dl, LoadInst, FPReg)
-        .addImm(FPOffset)
-        .addReg(SPReg);
+      BuildMI(MBB, MBBI, dl, GPRLoadInst, FPSaveReg)
+          .addImm(FPOffset)
+          .addReg(SPReg);
     else
-      BuildMI(MBB, MBBI, dl, LoadInst, ScratchReg)
-        .addImm(FPOffset)
-        .addReg(RBReg);
+      BuildMI(MBB, MBBI, dl, GPRLoadInst, GPRScratchReg)
+          .addImm(FPOffset)
+          .addReg(RBReg);
   }
 
   if (FI->usesPICBase())
-    BuildMI(MBB, MBBI, dl, LoadInst, PPC::R30)
-      .addImm(PBPOffset)
-      .addReg(RBReg);
+    BuildMI(MBB, MBBI, dl, GPRLoadInst, PICBaseSaveReg)
+        .addImm(PBPOffset)
+        .addReg(RBReg);
 
   if (HasBP)
-    BuildMI(MBB, MBBI, dl, LoadInst, BPReg)
-      .addImm(BPOffset)
-      .addReg(RBReg);
+    BuildMI(MBB, MBBI, dl, GPRLoadInst, BPSaveReg)
+        .addImm(BPOffset)
+        .addReg(RBReg);
 
   // There is nothing more to be loaded from the stack, so now we can
   // restore SP: SP = RBReg + SPAdd.
@@ -1844,9 +1882,9 @@ void PPCFrameLowering::emitEpilogue(MachineFunction &MF,
 
     assert(RBReg != ScratchReg && "Should be using FP or SP as base register");
     if (RBReg == FPReg)
-      BuildMI(MBB, MBBI, dl, OrInst, FPReg)
-        .addReg(ScratchReg)
-        .addReg(ScratchReg);
+      BuildMI(MBB, MBBI, dl, GPROrInst, FPSaveReg)
+          .addReg(GPRScratchReg)
+          .addReg(GPRScratchReg);
 
     // Now load the LR from the caller's stack frame.
     if (MustSaveLR && !LoadedLR)
@@ -1994,6 +2032,16 @@ void PPCFrameLowering::determineCalleeSaves(MachineFunction &MF,
   //  Save R31 if necessary
   int FPSI = FI->getFramePointerSaveIndex();
   const bool isPPC64 = Subtarget.isPPC64();
+  const bool Preserve64BitGPRs = isPPC64 || Subtarget.isXbox360();
+  const unsigned GPRSaveSize = Preserve64BitGPRs ? 8 : 4;
+  auto getGPRSaveReg = [&](Register Reg) -> Register {
+    if (!Preserve64BitGPRs || PPC::G8RCRegClass.contains(Reg))
+      return Reg;
+    return RegInfo->getMatchingSuperReg(Reg, PPC::sub_32, &PPC::G8RCRegClass);
+  };
+  Register FPSaveReg = getGPRSaveReg(isPPC64 ? PPC::X31 : PPC::R31);
+  Register BPSaveReg = getGPRSaveReg(RegInfo->getBaseRegister(MF));
+  Register PICBaseSaveReg = getGPRSaveReg(PPC::R30);
   MachineFrameInfo &MFI = MF.getFrameInfo();
 
   // If the frame pointer save index hasn't been defined yet.
@@ -2001,7 +2049,7 @@ void PPCFrameLowering::determineCalleeSaves(MachineFunction &MF,
     // Find out what the fix offset of the frame pointer save area.
     int FPOffset = getFramePointerSaveOffset();
     // Allocate the frame index for frame pointer save area.
-    FPSI = MFI.CreateFixedObject(isPPC64? 8 : 4, FPOffset, true);
+    FPSI = MFI.CreateFixedObject(GPRSaveSize, FPOffset, true);
     // Save the result.
     FI->setFramePointerSaveIndex(FPSI);
   }
@@ -2010,7 +2058,7 @@ void PPCFrameLowering::determineCalleeSaves(MachineFunction &MF,
   if (!BPSI && RegInfo->hasBasePointer(MF)) {
     int BPOffset = getBasePointerSaveOffset();
     // Allocate the frame index for the base pointer save area.
-    BPSI = MFI.CreateFixedObject(isPPC64? 8 : 4, BPOffset, true);
+    BPSI = MFI.CreateFixedObject(GPRSaveSize, BPOffset, true);
     // Save the result.
     FI->setBasePointerSaveIndex(BPSI);
   }
@@ -2018,7 +2066,8 @@ void PPCFrameLowering::determineCalleeSaves(MachineFunction &MF,
   // Reserve stack space for the PIC Base register (R30).
   // Only used in SVR4 32-bit.
   if (FI->usesPICBase()) {
-    int PBPSI = MFI.CreateFixedObject(4, -8, true);
+    int PBPOffset = Subtarget.isXbox360() ? -16 : -8;
+    int PBPSI = MFI.CreateFixedObject(GPRSaveSize, PBPOffset, true);
     FI->setPICBasePointerSaveIndex(PBPSI);
   }
 
@@ -2027,9 +2076,9 @@ void PPCFrameLowering::determineCalleeSaves(MachineFunction &MF,
   // frame pointer and are using r31's spill slot for the prologue/epilogue
   // code. Same goes for the base pointer and the PIC base register.
   if (needsFP(MF))
-    SavedRegs.reset(isPPC64 ? PPC::X31 : PPC::R31);
+    SavedRegs.reset(FPSaveReg);
   if (RegInfo->hasBasePointer(MF)) {
-    SavedRegs.reset(RegInfo->getBaseRegister(MF));
+    SavedRegs.reset(BPSaveReg);
     // On AIX, when BaseRegister(R30) is used, need to spill r31 too to match
     // AIX trackback table requirement.
     if (!needsFP(MF) && !SavedRegs.test(isPPC64 ? PPC::X31 : PPC::R31) &&
@@ -2041,7 +2090,7 @@ void PPCFrameLowering::determineCalleeSaves(MachineFunction &MF,
     }
   }
   if (FI->usesPICBase())
-    SavedRegs.reset(PPC::R30);
+    SavedRegs.reset(PICBaseSaveReg);
 
   // Reserve stack space to move the linkage area to in case of a tail call.
   int TCSPDelta = 0;
@@ -2236,11 +2285,11 @@ void PPCFrameLowering::processFunctionBeforeFrameFinalized(MachineFunction &MF,
       }
     }
 
-    unsigned MinReg =
-      std::min<unsigned>(TRI->getEncodingValue(MinGPR),
-                         TRI->getEncodingValue(MinG8R));
+    unsigned MinReg = std::min<unsigned>(TRI->getEncodingValue(MinGPR),
+                                         TRI->getEncodingValue(MinG8R));
 
-    const unsigned GPRegSize = Subtarget.isPPC64() ? 8 : 4;
+    const unsigned GPRegSize =
+        Subtarget.isPPC64() || Subtarget.isXbox360() ? 8 : 4;
     LowerBound -= (31 - MinReg + 1) * GPRegSize;
   }
 
@@ -2307,7 +2356,8 @@ PPCFrameLowering::addScavengingSpillSlot(MachineFunction &MF,
       (hasSpills(MF) && NeedSpills)) {
     const TargetRegisterClass &GPRC = PPC::GPRCRegClass;
     const TargetRegisterClass &G8RC = PPC::G8RCRegClass;
-    const TargetRegisterClass &RC = Subtarget.isPPC64() ? G8RC : GPRC;
+    const TargetRegisterClass &RC =
+        Subtarget.isPPC64() || Subtarget.isXbox360() ? G8RC : GPRC;
     const TargetRegisterInfo &TRI = *Subtarget.getRegisterInfo();
     unsigned Size = TRI.getSpillSize(RC);
     Align Alignment = TRI.getSpillAlign(RC);

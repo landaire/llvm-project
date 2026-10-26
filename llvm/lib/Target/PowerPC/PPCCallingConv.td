@@ -195,6 +195,10 @@ def RetCC_PPC64_ELF_FIS : CallingConv<[
 def CC_PPC32_SVR4_Common : CallingConv<[
   CCIfType<[i1], CCPromoteToType<i32>>,
 
+  CCIfType<[i64],
+           CCIfSubtarget<"isXbox360()",
+                         CCAssignToReg<[X3, X4, X5, X6, X7, X8, X9, X10]>>>,
+
   // The ABI requires i64 to be passed in two adjacent registers with the first
   // register having an odd register number.
   CCIfType<[i32],
@@ -240,6 +244,8 @@ def CC_PPC32_SVR4_Common : CallingConv<[
   
   CCIfType<[f32], CCAssignToStack<4, 4>>,
   CCIfType<[f64], CCAssignToStack<8, 8>>,
+  CCIfType<[i64],
+           CCIfSubtarget<"isXbox360()", CCAssignToStack<8, 8>>>,
 
   // Vectors and float128 get 16-byte stack slots that are 16-byte aligned.
   CCIfType<[v16i8, v8i16, v4i32, v4f32, v2f64, v2i64], CCAssignToStack<16, 16>>,

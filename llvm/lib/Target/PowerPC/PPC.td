@@ -72,10 +72,13 @@ def FeatureModernAIXAs
 def FeatureHardFloat : SubtargetFeature<"hard-float", "HasHardFloat", "true",
                               "Enable floating-point instructions">;
 
-// Specifies that we are in 64-bit mode or that we should use 64-bit registers
-// in 32-bit mode when possible. Requires Feature64Bit to be enabled.
+// Specifies that 64-bit registers should be used in 32-bit mode when possible.
+// Requires 64-bit instruction support.
 def Feature64BitRegs : SubtargetFeature<"64bitregs","Use64BitRegs", "true",
                               "Enable 64-bit registers usage for ppc32 [beta]">;
+def FeatureXbox360 : SubtargetFeature<
+    "xbox360", "IsXbox360", "true", "Use the experimental Xbox 360 ABI",
+    [Feature64BitSupport, Feature64BitRegs]>;
 
 // Specify if we should store and manipulate i1 values in the individual
 // condition register bits.

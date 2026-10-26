@@ -2922,12 +2922,8 @@ class IntegerCompareEliminator {
   SDValue getSETCCInGPR(SDValue Compare, SetccInGPROpts ConvOpts);
 
 public:
-  IntegerCompareEliminator(SelectionDAG *DAG,
-                           PPCDAGToDAGISel *Sel) : CurDAG(DAG), S(Sel) {
-    assert(CurDAG->getTargetLoweringInfo()
-           .getPointerTy(CurDAG->getDataLayout()).getSizeInBits() == 64 &&
-           "Only expecting to use this on 64 bit targets.");
-  }
+  IntegerCompareEliminator(SelectionDAG *DAG, PPCDAGToDAGISel *Sel)
+      : CurDAG(DAG), S(Sel) {}
   SDNode *Select(SDNode *N) {
     if (CmpInGPR == ICGPR_None)
       return nullptr;

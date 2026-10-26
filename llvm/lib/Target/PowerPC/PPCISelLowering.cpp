@@ -4179,9 +4179,11 @@ SDValue PPCTargetLowering::LowerFormalArguments_32SVR4(
   CCState CCInfo(CallConv, isVarArg, DAG.getMachineFunction(), ArgLocs,
                  *DAG.getContext());
 
-  // Reserve space for the linkage area on the stack.
+  // The Xbox 360 caller reserves eight 8-byte argument slots after linkage.
   unsigned LinkageSize = Subtarget.getFrameLowering()->getLinkageSize();
-  CCInfo.AllocateStack(LinkageSize, PtrAlign);
+  unsigned MinParameterArea = Subtarget.isXbox360() ? 64 : 0;
+  CCInfo.AllocateStack(LinkageSize + MinParameterArea,
+                       Subtarget.isXbox360() ? Align(8) : PtrAlign);
   CCInfo.AnalyzeFormalArguments(Ins, CC_PPC32_SVR4);
 
   for (unsigned i = 0, e = ArgLocs.size(); i != e; ++i) {
@@ -4198,6 +4200,9 @@ SDValue PPCTargetLowering::LowerFormalArguments_32SVR4(
         case MVT::i1:
         case MVT::i32:
           RC = &PPC::GPRCRegClass;
+          break;
+        case MVT::i64:
+          RC = &PPC::G8RCRegClass;
           break;
         case MVT::f32:
           if (Subtarget.hasP8Vector())
@@ -4286,7 +4291,7 @@ SDValue PPCTargetLowering::LowerFormalArguments_32SVR4(
 
   // Area that is at least reserved in the caller of this function.
   unsigned MinReservedArea = CCByValInfo.getStackSize();
-  MinReservedArea = std::max(MinReservedArea, LinkageSize);
+  MinReservedArea = std::max(MinReservedArea, LinkageSize + MinParameterArea);
 
   // Set the size that is at least reserved in caller of this function.  Tail
   // call optimized function's reserved stack space needs to be aligned so that
@@ -5906,9 +5911,11 @@ SDValue PPCTargetLowering::LowerCall_32SVR4(
   SmallVector<CCValAssign, 16> ArgLocs;
   CCState CCInfo(CallConv, IsVarArg, MF, ArgLocs, *DAG.getContext());
 
-  // Reserve space for the linkage area on the stack.
-  CCInfo.AllocateStack(Subtarget.getFrameLowering()->getLinkageSize(),
-                       PtrAlign);
+  // The Xbox 360 caller reserves eight 8-byte argument slots after linkage.
+  unsigned LinkageSize = Subtarget.getFrameLowering()->getLinkageSize();
+  unsigned MinParameterArea = Subtarget.isXbox360() ? 64 : 0;
+  CCInfo.AllocateStack(LinkageSize + MinParameterArea,
+                       Subtarget.isXbox360() ? Align(8) : PtrAlign);
 
   if (IsVarArg) {
     // Handle fixed and variable vector arguments differently.
@@ -7922,10 +7929,9 @@ SDValue PPCTargetLowering::getReturnAddrFrameIndex(SelectionDAG &DAG) const {
   return DAG.getFrameIndex(RASI, PtrVT);
 }
 
-SDValue
-PPCTargetLowering::getFramePointerFrameIndex(SelectionDAG & DAG) const {
+SDValue PPCTargetLowering::getFramePointerFrameIndex(SelectionDAG &DAG) const {
   MachineFunction &MF = DAG.getMachineFunction();
-  bool isPPC64 = Subtarget.isPPC64();
+  bool Uses64BitGPRs = Subtarget.isPPC64() || Subtarget.isXbox360();
   EVT PtrVT = getPointerTy(MF.getDataLayout());
 
   // Get current frame pointer save index.  The users of this index will be
@@ -7938,7 +7944,8 @@ PPCTargetLowering::getFramePointerFrameIndex(SelectionDAG & DAG) const {
     // Find out what the fix offset of the frame pointer save area.
     int FPOffset = Subtarget.getFrameLowering()->getFramePointerSaveOffset();
     // Allocate the frame index for frame pointer save area.
-    FPSI = MF.getFrameInfo().CreateFixedObject(isPPC64? 8 : 4, FPOffset, true);
+    FPSI = MF.getFrameInfo().CreateFixedObject(Uses64BitGPRs ? 8 : 4, FPOffset,
+                                               true);
     // Save the result.
     FI->setFramePointerSaveIndex(FPSI);
   }
@@ -11501,12 +11508,12 @@ SDValue PPCTargetLowering::LowerINTRINSIC_VOID(SDValue Op,
       // ordering?
       Val = DAG.getNode(ISD::TRUNCATE, DL, MVT::i64, Val);
     }
-    unsigned Opcode = Subtarget.isPPC64() ? PPC::CFENCE8 : PPC::CFENCE;
+    MVT RegVT = Subtarget.getScalarIntVT();
+    unsigned Opcode = RegVT == MVT::i64 ? PPC::CFENCE8 : PPC::CFENCE;
     return SDValue(
-        DAG.getMachineNode(
-            Opcode, DL, MVT::Other,
-            DAG.getNode(ISD::ANY_EXTEND, DL, Subtarget.getScalarIntVT(), Val),
-            Op.getOperand(0)),
+        DAG.getMachineNode(Opcode, DL, MVT::Other,
+                           DAG.getNode(ISD::ANY_EXTEND, DL, RegVT, Val),
+                           Op.getOperand(0)),
         0);
   }
   case Intrinsic::ppc_mma_disassemble_dmr: {

@@ -206,14 +206,15 @@ PPCRegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
   // will use the @notoc relocation which will cause this function to set the
   // st_other bit to 1, thereby communicating to its caller that it arbitrarily
   // clobbers the TOC.
-  bool SaveR2 = MF->getRegInfo().isAllocatable(PPC::X2) &&
+  bool SaveR2 = !Subtarget.isXbox360() &&
+                MF->getRegInfo().isAllocatable(PPC::X2) &&
                 !Subtarget.isUsingPCRelativeCalls();
 
   // Cold calling convention CSRs.
   if (MF->getFunction().getCallingConv() == CallingConv::Cold) {
     if (Subtarget.isAIXABI())
       report_fatal_error("Cold calling unimplemented on AIX.");
-    if (TM.isPPC64()) {
+    if (TM.isPPC64() || Subtarget.isXbox360()) {
       if (Subtarget.pairedVectorMemops())
         return SaveR2 ? CSR_SVR64_ColdCC_R2_VSRP_SaveList
                       : CSR_SVR64_ColdCC_VSRP_SaveList;
@@ -233,7 +234,7 @@ PPCRegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
     return CSR_SVR32_ColdCC_SaveList;
   }
   // Standard calling convention CSRs.
-  if (TM.isPPC64()) {
+  if (TM.isPPC64() || Subtarget.isXbox360()) {
     if (Subtarget.pairedVectorMemops()) {
       if (Subtarget.isAIXABI()) {
         if (!TM.getAIXExtendedAltivecABI())
@@ -307,7 +308,7 @@ PPCRegisterInfo::getCallPreservedMask(const MachineFunction &MF,
   }
 
   if (CC == CallingConv::Cold) {
-    if (TM.isPPC64())
+    if (TM.isPPC64() || Subtarget.isXbox360())
       return Subtarget.pairedVectorMemops()
                  ? CSR_SVR64_ColdCC_VSRP_RegMask
                  : (Subtarget.hasAltivec() ? CSR_SVR64_ColdCC_Altivec_RegMask
@@ -321,7 +322,7 @@ PPCRegisterInfo::getCallPreservedMask(const MachineFunction &MF,
                                               : CSR_SVR32_ColdCC_RegMask));
   }
 
-  if (TM.isPPC64())
+  if (TM.isPPC64() || Subtarget.isXbox360())
     return Subtarget.pairedVectorMemops()
                ? CSR_SVR464_VSRP_RegMask
                : (Subtarget.hasAltivec() ? CSR_PPC64_Altivec_RegMask
@@ -401,14 +402,11 @@ BitVector PPCRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
     markSuperRegs(Reserved, PPC::R31);
 
   bool IsPositionIndependent = TM.isPositionIndependent();
-  if (hasBasePointer(MF)) {
-    if (Subtarget.is32BitELFABI() && IsPositionIndependent)
-      markSuperRegs(Reserved, PPC::R29);
-    else
-      markSuperRegs(Reserved, PPC::R30);
-  }
+  if (hasBasePointer(MF))
+    markSuperRegs(Reserved, getBaseRegister(MF));
 
-  if (Subtarget.is32BitELFABI() && IsPositionIndependent)
+  if (Subtarget.isTargetELF() &&
+      MF.getDataLayout().getPointerSizeInBits() == 32 && IsPositionIndependent)
     markSuperRegs(Reserved, PPC::R30);
 
   // Reserve Altivec registers when Altivec is unavailable.
