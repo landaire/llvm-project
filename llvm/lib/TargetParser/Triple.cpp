@@ -308,10 +308,16 @@ StringRef Triple::getOSTypeName(OSType Kind) {
   case HermitCore: return "hermit";
   case Hurd: return "hurd";
   case IOS: return "ios";
-  case KFreeBSD: return "kfreebsd";
-  case Linux: return "linux";
-  case Lv2: return "lv2";
-  case MacOSX: return "macosx";
+  case KFreeBSD:
+    return "kfreebsd";
+  case Linux:
+    return "linux";
+  case Lv2:
+    return "lv2";
+  case Xbox360:
+    return "xbox360";
+  case MacOSX:
+    return "macosx";
   case Managarm:
     return "managarm";
   case Mesa3D: return "mesa3d";
@@ -716,6 +722,7 @@ static Triple::OSType parseOS(StringRef OSName) {
       .StartsWith("kfreebsd", Triple::KFreeBSD)
       .StartsWith("linux", Triple::Linux)
       .StartsWith("lv2", Triple::Lv2)
+      .StartsWith("xbox360", Triple::Xbox360)
       .StartsWith("macos", Triple::MacOSX)
       .StartsWith("managarm", Triple::Managarm)
       .StartsWith("netbsd", Triple::NetBSD)
