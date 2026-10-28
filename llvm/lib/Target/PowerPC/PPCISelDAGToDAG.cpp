@@ -5502,7 +5502,7 @@ void PPCDAGToDAGISel::Select(SDNode *N) {
   } break;
   case PPCISD::CALL:
   case PPCISD::CALL_RM: {
-    if (Subtarget->isPPC64() || !TM.isPositionIndependent() ||
+    if (Subtarget->usesPPC64ABI() || !TM.isPositionIndependent() ||
         !Subtarget->isSecurePlt() || !Subtarget->isTargetELF())
       break;
 
@@ -6105,7 +6105,7 @@ void PPCDAGToDAGISel::Select(SDNode *N) {
     return;
   }
   case PPCISD::TOC_ENTRY: {
-    const bool isPPC64 = Subtarget->isPPC64();
+    const bool isPPC64 = Subtarget->usesPPC64ABI();
     const bool isELFABI = Subtarget->isSVR4ABI();
     const bool isAIXABI = Subtarget->isAIXABI();
 
@@ -6234,8 +6234,9 @@ void PPCDAGToDAGISel::Select(SDNode *N) {
   }
   case PPCISD::PPC32_PICGOT:
     // Generate a PIC-safe GOT reference.
-    assert(Subtarget->is32BitELFABI() &&
-           "PPCISD::PPC32_PICGOT is only supported for 32-bit SVR4");
+    assert(
+        Subtarget->uses32BitSVR4ABI() &&
+        "PPCISD::PPC32_PICGOT is only supported for 32-bit SVR4 and Xbox 360");
     CurDAG->SelectNodeTo(N, PPC::PPC32PICGOT,
                          PPCLowering->getPointerTy(CurDAG->getDataLayout()),
                          MVT::i32);
