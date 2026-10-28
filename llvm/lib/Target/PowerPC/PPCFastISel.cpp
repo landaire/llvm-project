@@ -2464,9 +2464,10 @@ namespace llvm {
   // Create the fast instruction selector for PowerPC64 ELF.
   FastISel *PPC::createFastISel(FunctionLoweringInfo &FuncInfo,
                                 const TargetLibraryInfo *LibInfo) {
-    // Only available on 64-bit for now.
+    // Only available on 64-bit for now. The Xbox 360 uses 32-bit pointers,
+    // which PPCFastISel does not handle.
     const PPCSubtarget &Subtarget = FuncInfo.MF->getSubtarget<PPCSubtarget>();
-    if (Subtarget.isPPC64())
+    if (Subtarget.usesPPC64ABI())
       return new PPCFastISel(FuncInfo, LibInfo);
     return nullptr;
   }
