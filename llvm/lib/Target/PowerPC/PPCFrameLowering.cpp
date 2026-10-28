@@ -73,8 +73,8 @@ static unsigned computeLinkageSize(const PPCSubtarget &STI) {
 
 static unsigned computeBasePointerSaveOffset(const PPCSubtarget &STI) {
   // Third slot in the general purpose register save area.
-  if (STI.is32BitELFABI() && STI.getTargetMachine().isPositionIndependent())
-    return -12U;
+  if (STI.uses32BitSVR4ABI() && STI.getTargetMachine().isPositionIndependent())
+    return STI.isPPC64() ? -24U : -12U;
 
   // Second slot in the general purpose register save area.
   return STI.isPPC64() ? -16U : -8U;
@@ -688,6 +688,7 @@ void PPCFrameLowering::emitPrologue(MachineFunction &MF,
   };
   Register FPSaveReg = getGPRSaveReg(FPReg);
   Register BPSaveReg = getGPRSaveReg(BPReg);
+  Register PICBaseSaveReg = getGPRSaveReg(PPC::R30);
   //  ...(R12/X12 is volatile in both Darwin & SVR4, & can't be a function arg.)
   const MCInstrDesc& MFLRInst = TII.get(isPPC64 ? PPC::MFLR8
                                                 : PPC::MFLR );
@@ -863,10 +864,10 @@ void PPCFrameLowering::emitPrologue(MachineFunction &MF,
           .addImm(FPOffset)
           .addReg(SPReg);
     if (FI->usesPICBase())
-      BuildMI(MBB, MBBI, dl, StoreInst)
-        .addReg(PPC::R30)
-        .addImm(PBPOffset)
-        .addReg(SPReg);
+      BuildMI(MBB, MBBI, dl, GPRStoreInst)
+          .addReg(PICBaseSaveReg)
+          .addImm(PBPOffset)
+          .addReg(SPReg);
     if (HasBP)
       BuildMI(MBB, MBBI, dl, GPRStoreInst)
           .addReg(BPSaveReg)
@@ -1064,10 +1065,10 @@ void PPCFrameLowering::emitPrologue(MachineFunction &MF,
             .addReg(ScratchReg)
             .addImm(PBPOffset-LastOffset);
           LastOffset = PBPOffset;
-          BuildMI(MBB, MBBI, dl, TII.get(PPC::STWX))
-            .addReg(PPC::R30, RegState::Kill)  // Save PIC base pointer.
-            .addReg(PPC::ZERO)
-            .addReg(ScratchReg);  // This will be the index (R0 is ok here).
+          BuildMI(MBB, MBBI, dl, GPRStoreIndexedInst)
+              .addReg(PICBaseSaveReg, RegState::Kill) // Save PIC base pointer.
+              .addReg(PPC::ZERO)
+              .addReg(ScratchReg); // This will be the index (R0 is ok here).
         }
         if (HasBP) {
           // R0 += (BPOffset-LastOffset).
@@ -1096,10 +1097,10 @@ void PPCFrameLowering::emitPrologue(MachineFunction &MF,
               .addImm(FPOffset)
               .addReg(ScratchReg);
         if (FI->usesPICBase())
-          BuildMI(MBB, MBBI, dl, StoreInst)
-            .addReg(PPC::R30)
-            .addImm(PBPOffset)
-            .addReg(ScratchReg);
+          BuildMI(MBB, MBBI, dl, GPRStoreInst)
+              .addReg(PICBaseSaveReg)
+              .addImm(PBPOffset)
+              .addReg(ScratchReg);
         if (HasBP) {
           BuildMI(MBB, MBBI, dl, GPRStoreInst)
               .addReg(BPSaveReg)
@@ -1121,10 +1122,10 @@ void PPCFrameLowering::emitPrologue(MachineFunction &MF,
             .addImm(FrameSize + FPOffset)
             .addReg(SPReg);
       if (FI->usesPICBase())
-        BuildMI(MBB, MBBI, dl, StoreInst)
-          .addReg(PPC::R30)
-          .addImm(FrameSize + PBPOffset)
-          .addReg(SPReg);
+        BuildMI(MBB, MBBI, dl, GPRStoreInst)
+            .addReg(PICBaseSaveReg)
+            .addImm(FrameSize + PBPOffset)
+            .addReg(SPReg);
       if (HasBP) {
         BuildMI(MBB, MBBI, dl, GPRStoreInst)
             .addReg(BPSaveReg)
@@ -1619,6 +1620,7 @@ void PPCFrameLowering::emitEpilogue(MachineFunction &MF,
   };
   Register FPSaveReg = getGPRSaveReg(FPReg);
   Register BPSaveReg = getGPRSaveReg(BPReg);
+  Register PICBaseSaveReg = getGPRSaveReg(PPC::R30);
   const MCInstrDesc& MTLRInst = TII.get( isPPC64 ? PPC::MTLR8
                                                  : PPC::MTLR );
   const MCInstrDesc& LoadInst = TII.get( isPPC64 ? PPC::LD
@@ -1885,9 +1887,9 @@ void PPCFrameLowering::emitEpilogue(MachineFunction &MF,
   }
 
   if (FI->usesPICBase())
-    BuildMI(MBB, MBBI, dl, LoadInst, PPC::R30)
-      .addImm(PBPOffset)
-      .addReg(RBReg);
+    BuildMI(MBB, MBBI, dl, GPRLoadInst, PICBaseSaveReg)
+        .addImm(PBPOffset)
+        .addReg(RBReg);
 
   if (HasBP)
     BuildMI(MBB, MBBI, dl, GPRLoadInst, BPSaveReg)
@@ -2067,6 +2069,7 @@ void PPCFrameLowering::determineCalleeSaves(MachineFunction &MF,
   };
   Register FPSaveReg = getGPRSaveReg(isPPC64 ? PPC::X31 : PPC::R31);
   Register BPSaveReg = getGPRSaveReg(RegInfo->getBaseRegister(MF));
+  Register PICBaseSaveReg = getGPRSaveReg(PPC::R30);
   MachineFrameInfo &MFI = MF.getFrameInfo();
 
   // The Xbox 360 LR save word is below the incoming stack pointer. Reserve it
@@ -2098,7 +2101,8 @@ void PPCFrameLowering::determineCalleeSaves(MachineFunction &MF,
   // Reserve stack space for the PIC Base register (R30).
   // Only used in SVR4 32-bit.
   if (FI->usesPICBase()) {
-    int PBPSI = MFI.CreateFixedObject(4, -8, true);
+    int PBPOffset = Subtarget.isPPC64() ? -16 : -8;
+    int PBPSI = MFI.CreateFixedObject(GPRSaveSize, PBPOffset, true);
     FI->setPICBasePointerSaveIndex(PBPSI);
   }
 
@@ -2121,7 +2125,7 @@ void PPCFrameLowering::determineCalleeSaves(MachineFunction &MF,
     }
   }
   if (FI->usesPICBase())
-    SavedRegs.reset(PPC::R30);
+    SavedRegs.reset(PICBaseSaveReg);
 
   // Reserve stack space to move the linkage area to in case of a tail call.
   int TCSPDelta = 0;
@@ -2170,10 +2174,11 @@ void PPCFrameLowering::processFunctionBeforeFrameFinalized(MachineFunction &MF,
   }
 
   // Early exit if no callee saved registers are modified! The Xbox 360 still
-  // moves the base pointer slot below the LR and CR save words.
+  // moves the base pointer and PIC base slots below the LR and CR save words.
   if (CSI.empty() && !needsFP(MF) &&
       !(Subtarget.isXbox360() &&
-        Subtarget.getRegisterInfo()->hasBasePointer(MF))) {
+        (Subtarget.getRegisterInfo()->hasBasePointer(MF) ||
+         MF.getInfo<PPCFunctionInfo>()->usesPICBase()))) {
     addScavengingSpillSlot(MF, RS);
     return;
   }
