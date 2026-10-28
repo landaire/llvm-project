@@ -46,6 +46,7 @@ define ptr @spill_pointer(ptr %pointer) {
 }
 
 ; BE-LABEL: call_loaded_i64:
+; BE:       mflr 0
 ; BE:       stwu 1, -80(1)
 ; BE:       ld 3, 0(3)
 ; BE:       bl callee
@@ -56,6 +57,22 @@ define i64 @call_loaded_i64(ptr %address) {
   %value = load i64, ptr %address, align 8
   %result = call i64 @callee(i64 %value)
   ret i64 %result
+}
+
+; Indirect calls use the PPC64 instruction definitions, whose BCTRL8 opcode
+; defines LR8. The prologue must therefore save and restore the physical link
+; register even though the ABI uses 32-bit pointers and DWARF register mappings.
+; BE-LABEL: call_indirect:
+; BE:       mflr 0
+; BE:       stw 0,
+; BE:       bctrl
+; BE:       lwz 0,
+; BE:       mtlr 0
+; BE:       blr
+
+define i32 @call_indirect(ptr %callee, i32 %value) {
+  %result = call i32 %callee(i32 %value)
+  ret i32 %result
 }
 
 ; The i64 uses one 64-bit argument register after the preceding i32.

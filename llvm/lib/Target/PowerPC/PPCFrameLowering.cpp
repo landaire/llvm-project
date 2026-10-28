@@ -286,15 +286,18 @@ static bool hasNonRISpills(const MachineFunction &MF) {
 /// MustSaveLR - Return true if this function requires that we save the LR
 /// register onto the stack in the prolog and restore it in the epilog of the
 /// function.
-static bool MustSaveLR(const MachineFunction &MF, MCRegister LR) {
+static bool MustSaveLR(const MachineFunction &MF) {
   const PPCFunctionInfo *MFI = MF.getInfo<PPCFunctionInfo>();
+  const MachineRegisterInfo &MRI = MF.getRegInfo();
 
   // We need a save/restore of LR if there is any def of LR (which is
   // defined by calls, including the PIC setup sequence), or if there is
   // some use of the LR stack slot (e.g. for builtin_return_address).
-  // (LR comes in 32 and 64 bit versions.)
-  MachineRegisterInfo::def_iterator RI = MF.getRegInfo().def_begin(LR);
-  return RI !=MF.getRegInfo().def_end() || MFI->isLRStoreRequired();
+  // Check both register views because mixed ISA and ABI modes can use both.
+  for (MCRegister LR : {PPC::LR, PPC::LR8})
+    if (!MRI.def_empty(LR))
+      return true;
+  return MFI->isLRStoreRequired();
 }
 
 /// determineFrameLayoutAndUpdate - Determine the size of the frame and maximum
@@ -330,11 +333,10 @@ PPCFrameLowering::determineFrameLayout(const MachineFunction &MF,
 
   const PPCRegisterInfo *RegInfo = Subtarget.getRegisterInfo();
 
-  MCRegister LR = RegInfo->getRARegister();
   bool DisableRedZone = MF.getFunction().hasFnAttribute(Attribute::NoRedZone);
   bool CanUseRedZone = !MFI.hasVarSizedObjects() && // No dynamic alloca.
                        !MFI.adjustsStack() &&       // No calls.
-                       !MustSaveLR(MF, LR) &&       // No need to save LR.
+                       !MustSaveLR(MF) &&           // No need to save LR.
                        !FI->mustSaveTOC() &&        // No need to save TOC.
                        !RegInfo->hasBasePointer(MF) && // No special alignment.
                        !MFI.isFrameAddressTaken();
@@ -2026,7 +2028,7 @@ void PPCFrameLowering::determineCalleeSaves(MachineFunction &MF,
   //  Save and clear the LR state.
   PPCFunctionInfo *FI = MF.getInfo<PPCFunctionInfo>();
   MCRegister LR = RegInfo->getRARegister();
-  FI->setMustSaveLR(MustSaveLR(MF, LR));
+  FI->setMustSaveLR(MustSaveLR(MF));
   SavedRegs.reset(LR);
 
   //  Save R31 if necessary
