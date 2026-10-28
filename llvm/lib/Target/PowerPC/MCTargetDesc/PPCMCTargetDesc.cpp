@@ -148,6 +148,10 @@ PPCTargetStreamer::PPCTargetStreamer(MCStreamer &S) : MCTargetStreamer(S) {}
 // Pin the vtable to this file.
 PPCTargetStreamer::~PPCTargetStreamer() = default;
 
+bool PPC::usesPPC64ABI(const Triple &TT) {
+  return TT.isPPC64() && TT.getOS() != Triple::Xbox360;
+}
+
 static MCInstrInfo *createPPCMCInstrInfo() {
   MCInstrInfo *X = new MCInstrInfo();
   InitPPCMCInstrInfo(X);
@@ -155,8 +159,7 @@ static MCInstrInfo *createPPCMCInstrInfo() {
 }
 
 static MCRegisterInfo *createPPCMCRegisterInfo(const Triple &TT) {
-  bool isPPC64 =
-      (TT.getArch() == Triple::ppc64 || TT.getArch() == Triple::ppc64le);
+  bool isPPC64 = PPC::usesPPC64ABI(TT);
   unsigned Flavour = isPPC64 ? 0 : 1;
   unsigned RA = isPPC64 ? PPC::LR8 : PPC::LR;
 
@@ -177,14 +180,20 @@ static MCSubtargetInfo *createPPCMCSubtargetInfo(const Triple &TT,
       FullFS = "+aix";
   }
 
+  if (TT.getOS() == Triple::Xbox360) {
+    if (!FullFS.empty())
+      FullFS += ",+xbox360";
+    else
+      FullFS = "+xbox360";
+  }
+
   return createPPCMCSubtargetInfoImpl(TT, CPU, /*TuneCPU*/ CPU, FullFS);
 }
 
 static MCAsmInfo *createPPCMCAsmInfo(const MCRegisterInfo &MRI,
                                      const Triple &TheTriple,
                                      const MCTargetOptions &Options) {
-  bool isPPC64 = (TheTriple.getArch() == Triple::ppc64 ||
-                  TheTriple.getArch() == Triple::ppc64le);
+  bool isPPC64 = PPC::usesPPC64ABI(TheTriple);
 
   MCAsmInfo *MAI;
   if (TheTriple.isOSBinFormatXCOFF())

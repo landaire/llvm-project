@@ -256,7 +256,7 @@ public:
   std::unique_ptr<MCObjectTargetWriter>
   createObjectTargetWriter() const override {
     uint8_t OSABI = MCELFObjectTargetWriter::getOSABI(TT.getOS());
-    bool Is64 = TT.isPPC64();
+    bool Is64 = PPC::usesPPC64ABI(TT);
     return createPPCELFObjectWriter(Is64, OSABI);
   }
 

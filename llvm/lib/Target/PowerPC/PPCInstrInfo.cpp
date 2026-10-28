@@ -3435,7 +3435,7 @@ void PPCInstrInfo::materializeImmPostRA(MachineBasicBlock &MBB,
                                         int64_t Imm) const {
   assert(!MBB.getParent()->getRegInfo().isSSA() &&
          "Register should be in non-SSA form after RA");
-  bool isPPC64 = Subtarget.isPPC64();
+  bool isPPC64 = RI.getRegSizeInBits(Reg, MBB.getParent()->getRegInfo()) == 64;
   // FIXME: Materialization here is not optimal.
   // For some special bit patterns we can use less instructions.
   // See `selectI64ImmDirect` in PPCISelDAGToDAG.cpp.
@@ -5476,9 +5476,13 @@ void PPCInstrInfo::promoteInstr32To64ForElimEXTSW(const Register &Reg,
     if (!OperandReg.isVirtual())
       continue;
 
-    const TargetRegisterClass *NewUsedRegRC =
-        TRI->getRegClass(MCID.operands()[i].RegClass);
+    const TargetRegisterClass *NewUsedRegRC = TII->getRegClass(MCID, i);
     const TargetRegisterClass *OrgRC = MRI->getRegClass(OperandReg);
+
+    // Pointer operands of the 64-bit instruction keep a 32-bit register class
+    // when pointers are 32 bits wide, as on the Xbox 360.
+    if (!NewUsedRegRC || TRI->getRegSizeInBits(*NewUsedRegRC) != 64)
+      continue;
     if (NewUsedRegRC != OrgRC && (OrgRC == &PPC::GPRCRegClass ||
                                   OrgRC == &PPC::GPRC_and_GPRC_NOR0RegClass)) {
       // Promote the used 32-bit register to 64-bit register.
