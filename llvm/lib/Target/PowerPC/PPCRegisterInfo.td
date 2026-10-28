@@ -14,7 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 defvar PPC32 = DefaultMode;
-def PPC64 : HwMode<[IsPPC64]>;
+def PPC64 : HwMode<[UsesPPC64ABI]>;
 
 include "PPCOperands.td"
 include "PPCRegisterClasses.td"

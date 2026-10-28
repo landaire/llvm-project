@@ -6343,9 +6343,9 @@ void PPCDAGToDAGISel::Select(SDNode *N) {
       break;
 
     SDValue ZeroReg =
-        CurDAG->getRegister(Subtarget->isPPC64() ? PPC::ZERO8 : PPC::ZERO,
+        CurDAG->getRegister(Subtarget->usesPPC64ABI() ? PPC::ZERO8 : PPC::ZERO,
                             Subtarget->getScalarIntVT());
-    unsigned LIOpcode = Subtarget->isPPC64() ? PPC::LI8 : PPC::LI;
+    unsigned LIOpcode = Subtarget->usesPPC64ABI() ? PPC::LI8 : PPC::LI;
     // v16i8 LD_SPLAT addr
     // ======>
     // Mask = LVSR/LVSL 0, addr

@@ -33,6 +33,7 @@ class MCRegisterInfo;
 class MCSubtargetInfo;
 class MCTargetOptions;
 class Target;
+class Triple;
 
 namespace PPC {
 /// stripRegisterPrefix - This method strips the character prefix from a
@@ -49,6 +50,10 @@ const char *stripRegisterPrefix(const char *RegName);
 /// operands).
 MCRegister getRegNumForOperand(const MCInstrDesc &Desc, MCRegister Reg,
                                unsigned OpNo);
+
+/// Returns true if the target uses the 64-bit PowerPC ABI. The Xbox 360 runs
+/// 64-bit code under a 32-bit ABI.
+bool usesPPC64ABI(const Triple &TT);
 
 } // namespace PPC
 
