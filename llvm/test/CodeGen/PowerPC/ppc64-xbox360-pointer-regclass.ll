@@ -14,7 +14,7 @@ define i32 @asm_memory_operand(ptr %p) {
 ; The frame exceeds the 16-bit displacement range, so local stack slot
 ; allocation materializes a frame base register.
 ; CHECK-LABEL: large_frame_copy:
-; CHECK:       stwux 1, 1, 0
+; CHECK:       stwu 0, -4096(1)
 ; CHECK:       add [[BASE:[0-9]+]], 1, [[BASE]]
 ; CHECK:       ld [[WORD:[0-9]+]], 24([[BASE]])
 ; CHECK:       std [[WORD]], 24(3)
