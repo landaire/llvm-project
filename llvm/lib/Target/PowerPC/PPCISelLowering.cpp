@@ -12772,6 +12772,17 @@ SDValue PPCTargetLowering::LowerADDSUBO(SDValue Op, SelectionDAG &DAG) const {
   EVT CarryType = N->getValueType(1);
   unsigned Opc = N->getOpcode();
   bool IsAdd = Opc == ISD::UADDO;
+  // The Xbox 360 runs in 32-bit mode, where CA is the carry out of the low
+  // word.
+  if (VT == MVT::i64 && Subtarget.isXbox360()) {
+    SDValue LHS = N->getOperand(0);
+    SDValue RHS = N->getOperand(1);
+    SDValue Sum = DAG.getNode(IsAdd ? ISD::ADD : ISD::SUB, DL, VT, LHS, RHS);
+    SDValue Carry = DAG.getSetCC(DL, CarryType, IsAdd ? Sum : LHS,
+                                 IsAdd ? LHS : RHS, ISD::SETULT);
+    return DAG.getNode(ISD::MERGE_VALUES, DL, N->getVTList(), Sum, Carry);
+  }
+
   Opc = IsAdd ? PPCISD::ADDC : PPCISD::SUBC;
   SDValue Sum = DAG.getNode(Opc, DL, DAG.getVTList(VT, MVT::i32),
                             N->getOperand(0), N->getOperand(1));
@@ -12792,6 +12803,23 @@ SDValue PPCTargetLowering::LowerADDSUBO_CARRY(SDValue Op,
   EVT CarryType = N->getValueType(1);
   SDValue CarryOp = N->getOperand(2);
   bool IsAdd = Opc == ISD::UADDO_CARRY;
+  // The Xbox 360 runs in 32-bit mode, where CA is the carry out of the low
+  // word.
+  if (VT == MVT::i64 && Subtarget.isXbox360()) {
+    SDValue LHS = N->getOperand(0);
+    SDValue RHS = N->getOperand(1);
+    SDValue CarryValue = DAG.getZExtOrTrunc(CarryOp, DL, VT);
+    unsigned ArithOpc = IsAdd ? ISD::ADD : ISD::SUB;
+    SDValue Partial = DAG.getNode(ArithOpc, DL, VT, LHS, RHS);
+    SDValue Sum = DAG.getNode(ArithOpc, DL, VT, Partial, CarryValue);
+    SDValue Carry0 = DAG.getSetCC(DL, CarryType, IsAdd ? Partial : LHS,
+                                  IsAdd ? LHS : RHS, ISD::SETULT);
+    SDValue Carry1 = DAG.getSetCC(DL, CarryType, IsAdd ? Sum : Partial,
+                                  IsAdd ? Partial : CarryValue, ISD::SETULT);
+    SDValue Carry = DAG.getNode(ISD::OR, DL, CarryType, Carry0, Carry1);
+    return DAG.getNode(ISD::MERGE_VALUES, DL, N->getVTList(), Sum, Carry);
+  }
+
   Opc = IsAdd ? PPCISD::ADDE : PPCISD::SUBE;
   if (!IsAdd)
     CarryOp = DAG.getNode(ISD::XOR, DL, CarryOp.getValueType(), CarryOp,
@@ -12869,6 +12897,17 @@ SDValue PPCTargetLowering::LowerUCMP(SDValue Op, SelectionDAG &DAG) const {
   SDValue B = DAG.getFreeze(Op.getOperand(1));
   EVT OpVT = A.getValueType();
   EVT ResVT = Op.getValueType();
+
+  // The carry sequence below does not work in the 32-bit mode of the Xbox 360.
+  if (OpVT == MVT::i64 && Subtarget.isXbox360()) {
+    EVT CmpVT =
+        getSetCCResultType(DAG.getDataLayout(), *DAG.getContext(), OpVT);
+    SDValue LT = DAG.getSetCC(DL, CmpVT, A, B, ISD::SETULT);
+    SDValue GT = DAG.getSetCC(DL, CmpVT, A, B, ISD::SETUGT);
+    LT = DAG.getZExtOrTrunc(LT, DL, ResVT);
+    GT = DAG.getZExtOrTrunc(GT, DL, ResVT);
+    return DAG.getNode(ISD::SUB, DL, ResVT, GT, LT);
+  }
 
   // On PPC64, i32 carries are affected by the upper 32 bits of the registers.
   // We must zero-extend to i64 to ensure the carry reflects the 32-bit unsigned
