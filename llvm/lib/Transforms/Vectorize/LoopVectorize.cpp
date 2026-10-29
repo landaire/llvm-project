@@ -884,7 +884,10 @@ public:
         OptForSize(OptForSize) {
     if (TTI.supportsScalableVectors() || ForceTargetSupportsScalableVectors)
       initializeVScaleForTuning();
-    CostKind = F->hasMinSize() ? TTI::TCK_CodeSize : TTI::TCK_RecipThroughput;
+    CostKind = F->hasMinSize() || (F->hasOptSize() &&
+                                   TTI.preferVectorizationCodeSizeCost())
+                   ? TTI::TCK_CodeSize
+                   : TTI::TCK_RecipThroughput;
   }
 
   /// \return An upper bound for the vectorization factors (both fixed and

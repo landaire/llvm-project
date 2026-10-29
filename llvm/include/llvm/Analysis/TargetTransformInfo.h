@@ -1428,6 +1428,9 @@ public:
   /// and the number of execution units in the CPU.
   LLVM_ABI unsigned getMaxInterleaveFactor(ElementCount VF) const;
 
+  /// Prefer code-size costs for vectorization in size-optimized functions.
+  LLVM_ABI bool preferVectorizationCodeSizeCost() const;
+
   /// Collect properties of V used in cost analysis, e.g. OP_PowerOf2.
   LLVM_ABI static OperandValueInfo getOperandInfo(const Value *V);
 

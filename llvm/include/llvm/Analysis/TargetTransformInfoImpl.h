@@ -665,6 +665,8 @@ public:
 
   virtual unsigned getMaxInterleaveFactor(ElementCount VF) const { return 1; }
 
+  virtual bool preferVectorizationCodeSizeCost() const { return false; }
+
   virtual InstructionCost getArithmeticInstrCost(
       unsigned Opcode, Type *Ty, TTI::TargetCostKind CostKind,
       TTI::OperandValueInfo Opd1Info, TTI::OperandValueInfo Opd2Info,

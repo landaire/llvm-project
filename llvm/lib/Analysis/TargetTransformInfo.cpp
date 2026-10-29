@@ -888,6 +888,10 @@ unsigned TargetTransformInfo::getMaxInterleaveFactor(ElementCount VF) const {
   return TTIImpl->getMaxInterleaveFactor(VF);
 }
 
+bool TargetTransformInfo::preferVectorizationCodeSizeCost() const {
+  return TTIImpl->preferVectorizationCodeSizeCost();
+}
+
 TargetTransformInfo::OperandValueInfo
 TargetTransformInfo::getOperandInfo(const Value *V) {
   OperandValueKind OpInfo = OK_AnyValue;

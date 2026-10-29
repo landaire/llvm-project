@@ -102,6 +102,9 @@ public:
   unsigned getCacheLineSize() const override;
   unsigned getPrefetchDistance() const override;
   unsigned getMaxInterleaveFactor(ElementCount VF) const override;
+  bool preferVectorizationCodeSizeCost() const override {
+    return ST->isXbox360();
+  }
   InstructionCost vectorCostAdjustmentFactor(unsigned Opcode, Type *Ty1,
                                              Type *Ty2) const;
   InstructionCost getArithmeticInstrCost(
