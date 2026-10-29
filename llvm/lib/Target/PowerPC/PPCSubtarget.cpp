@@ -124,6 +124,9 @@ void PPCSubtarget::initSubtargetFeatures(StringRef CPU, StringRef TuneCPU,
     report_fatal_error(
         "xbox360 requires a big-endian powerpc64-unknown-xbox360 ELF target\n",
         false);
+  // Xenon has no VSX, and VMX128 encodings overlap later instructions.
+  if (HasVMX128 && HasVSX)
+    report_fatal_error("VMX128 and VSX cannot both be enabled.\n", false);
 
   if (HasAIXSmallLocalExecTLS || HasAIXSmallLocalDynamicTLS) {
     if (!getTargetTriple().isOSAIX() || !IsPPC64)
