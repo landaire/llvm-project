@@ -82,6 +82,9 @@ public:
   getPointerRegClass(unsigned Kind = 0) const override;
 
   const TargetRegisterClass *
+  getMinimalPhysRegClass(MCRegister Reg, MVT VT = MVT::Other) const override;
+
+  const TargetRegisterClass *
   getCrossCopyRegClass(const TargetRegisterClass *RC) const override;
 
   unsigned getRegPressureLimit(const TargetRegisterClass *RC,

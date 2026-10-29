@@ -352,8 +352,8 @@ public:
   /// Returns the Register Class of a physical register of the given type,
   /// picking the most sub register class of the right type that contains this
   /// physreg.
-  const TargetRegisterClass *getMinimalPhysRegClass(MCRegister Reg,
-                                                    MVT VT = MVT::Other) const;
+  virtual const TargetRegisterClass *
+  getMinimalPhysRegClass(MCRegister Reg, MVT VT = MVT::Other) const;
 
   /// Returns the common Register Class of two physical registers of the given
   /// type, picking the most sub register class of the right type that contains
