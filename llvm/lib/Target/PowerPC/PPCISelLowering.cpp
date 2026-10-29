@@ -19490,7 +19490,11 @@ bool PPCTargetLowering::getTgtMemIntrinsic(IntrinsicInfo &Info,
   case Intrinsic::ppc_vsx_lxvd2x_be:
   case Intrinsic::ppc_vsx_lxvw4x_be:
   case Intrinsic::ppc_vsx_lxvl:
-  case Intrinsic::ppc_vsx_lxvll: {
+  case Intrinsic::ppc_vsx_lxvll:
+  case Intrinsic::ppc_vmx128_lvlx:
+  case Intrinsic::ppc_vmx128_lvrx:
+  case Intrinsic::ppc_vmx128_lvlxl:
+  case Intrinsic::ppc_vmx128_lvrxl: {
     EVT VT;
     switch (Intrinsic) {
     case Intrinsic::ppc_altivec_lvebx:
@@ -19530,7 +19534,11 @@ bool PPCTargetLowering::getTgtMemIntrinsic(IntrinsicInfo &Info,
   case Intrinsic::ppc_vsx_stxvd2x_be:
   case Intrinsic::ppc_vsx_stxvw4x_be:
   case Intrinsic::ppc_vsx_stxvl:
-  case Intrinsic::ppc_vsx_stxvll: {
+  case Intrinsic::ppc_vsx_stxvll:
+  case Intrinsic::ppc_vmx128_stvlx:
+  case Intrinsic::ppc_vmx128_stvrx:
+  case Intrinsic::ppc_vmx128_stvlxl:
+  case Intrinsic::ppc_vmx128_stvrxl: {
     EVT VT;
     switch (Intrinsic) {
     case Intrinsic::ppc_altivec_stvebx:
