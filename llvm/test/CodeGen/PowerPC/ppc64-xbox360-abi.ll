@@ -6,7 +6,7 @@
 ; RUN:   -verify-machineinstrs < %s | FileCheck %s --check-prefix=FP
 ; RUN: llc -ppc-reg-with-percent-prefix -mtriple=powerpc64-unknown-xbox360 -stackrealign \
 ; RUN:   -verify-machineinstrs < %s | FileCheck %s --check-prefix=BP
-; RUN: llc -mtriple=powerpc64-unknown-xbox360 -mattr=+altivec \
+; RUN: llc -ppc-reg-with-percent-prefix -mtriple=powerpc64-unknown-xbox360 -mattr=+altivec,-vmx128 \
 ; RUN:   -verify-machineinstrs < %s | FileCheck %s --check-prefix=VMX
 ; RUN: llc -mtriple=powerpc64-unknown-xbox360 \
 ; RUN:   -filetype=obj < %s | llvm-readobj --file-headers - | FileCheck %s --check-prefix=ELF
