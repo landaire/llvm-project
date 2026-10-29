@@ -11259,6 +11259,8 @@ def err_ppc_invalid_use_mma_type : Error<
   "invalid use of PPC MMA type">;
 def err_ppc_invalid_test_data_class_type : Error<
   "expected a 'float', 'double' or '__float128' for the first argument">;
+def err_ppc_invalid_arg_type : Error<
+  "argument %0 must be of type %1">;
 def err_xbox360_vector_variadic_arg : Error<
   "vector arguments to variadic or unprototyped functions are not supported "
   "by the Xbox 360 ABI">;
