@@ -140,6 +140,17 @@ Value *CodeGenFunction::EmitPPCBuiltinExpr(unsigned BuiltinID,
   switch (BuiltinID) {
   default: return nullptr;
 
+  case PPC::BI__builtin_ppc_get_pcr: {
+    // Migration may change r13 across a call. Keep each read on the chain;
+    // an ordinary read_register or thread_pointer could be commoned.
+    llvm::MDNode *Reg = llvm::MDNode::get(
+        getLLVMContext(), llvm::MDString::get(getLLVMContext(), "r13"));
+    llvm::Function *F =
+        CGM.getIntrinsic(Intrinsic::read_volatile_register, {Int32Ty});
+    return Builder.CreateCall(
+        F, llvm::MetadataAsValue::get(getLLVMContext(), Reg));
+  }
+
   case Builtin::BI__builtin_cpu_is: {
     const Expr *CPUExpr = E->getArg(0)->IgnoreParenCasts();
     StringRef CPUStr = cast<clang::StringLiteral>(CPUExpr)->getString();
