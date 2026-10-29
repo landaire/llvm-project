@@ -11259,6 +11259,9 @@ def err_ppc_invalid_use_mma_type : Error<
   "invalid use of PPC MMA type">;
 def err_ppc_invalid_test_data_class_type : Error<
   "expected a 'float', 'double' or '__float128' for the first argument">;
+def err_xbox360_vector_variadic_arg : Error<
+  "vector arguments to variadic or unprototyped functions are not supported "
+  "by the Xbox 360 ABI">;
 def err_x86_builtin_invalid_rounding : Error<
   "invalid rounding argument">;
 def err_x86_builtin_invalid_scale : Error<
